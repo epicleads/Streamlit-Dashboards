@@ -476,7 +476,7 @@ with col_branch_left:
             "lost": "Lost Leads",
         }
     )
-    st.dataframe(branches_table_display, use_container_width=True)
+    st.dataframe(branches_table_display, use_container_width=True, hide_index=True)
 
     # Toggle to view/hide underlying raw data (respects selected date filter if applied)
     show_underlying = st.toggle("View underlying data", value=False)
