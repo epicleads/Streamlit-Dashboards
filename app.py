@@ -39,7 +39,7 @@ if "_printed_local_url" not in st.session_state:
     print(f"Local URL: http://{host}:{port}")
     st.session_state["_printed_local_url"] = True
 
-st.title("🚶Walkin Leads")
+st.title("🚶Analytics Dashboard")
 
 # KPI cards (top): All in one row
 col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6 = st.columns(6)
