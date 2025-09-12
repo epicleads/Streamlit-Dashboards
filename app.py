@@ -345,13 +345,142 @@ with col_kpi_8:
     except Exception as err:
         st.warning(f"Could not load KPI (Walkin Won): {err}")
 
-# Branch wise lead count section - half width
-col_branch_left, col_branch_right = st.columns([1, 1])
-with col_branch_left:
-    # Date filter controls (applies to aggregates below and preview)
-    filter_option = st.selectbox(
-        "Date filter (based on created_at)", ["MTD", "Today", "Custom Range", "None"], index=0
-    )
+# Horizontal navigation tabs for different dashboard sections
+tab1, tab2, tab3 = st.tabs(["🔧 Admin", "📊 PS Performance", "👥 CRE Performance"])
+
+with tab1:
+    # Fetch lead sources data with final_status and created_at
+    try:
+        leads_res = supabase.table("lead_master").select("source", "final_status", "created_at").execute()
+        df_leads = pd.DataFrame(leads_res.data)
+    except Exception as err:
+        st.warning(f"Could not load lead sources: {err}")
+        df_leads = pd.DataFrame()
+
+    # Date filter controls for Admin dashboard - compact size
+    col_filter_admin, col_empty_filter_admin = st.columns([0.2, 0.8])
+    with col_filter_admin:
+        filter_option_admin = st.selectbox(
+            "Date filter (based on created_at)", ["MTD", "Today", "Custom Range", "All time"], index=0, key="admin_filter"
+        )
+
+    # Determine start/end datetimes for admin filter (all in UTC)
+    now_ts_admin = pd.Timestamp.now(tz="UTC")
+    today_start_admin = pd.Timestamp(date.today()).tz_localize("UTC")
+    today_end_admin = today_start_admin + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+    month_start_admin = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
+
+    if filter_option_admin == "Today":
+        start_dt_admin, end_dt_admin = today_start_admin, today_end_admin
+    elif filter_option_admin == "MTD":
+        start_dt_admin, end_dt_admin = month_start_admin, now_ts_admin
+    elif filter_option_admin == "Custom Range":
+        # Custom date inputs also in compact size
+        col_custom_admin, col_empty_custom_admin = st.columns([0.2, 0.8])
+        with col_custom_admin:
+            col_start_admin, col_end_admin = st.columns(2)
+            with col_start_admin:
+                custom_start_admin = st.date_input("Start date", value=date.today().replace(day=1), key="admin_start")
+            with col_end_admin:
+                custom_end_admin = st.date_input("End date", value=date.today(), key="admin_end")
+        # Normalize to full-day range
+        start_dt_admin = pd.Timestamp(custom_start_admin).tz_localize("UTC")
+        end_dt_admin = pd.Timestamp(custom_end_admin).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+    else:
+        start_dt_admin, end_dt_admin = None, None
+
+    # Apply created_at filter to admin data
+    df_leads_filtered = df_leads.copy()
+    if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
+        if not df_leads.empty and "created_at" in df_leads.columns:
+            created_ts_admin = pd.to_datetime(df_leads["created_at"], errors="coerce", utc=True)
+            mask_admin = created_ts_admin.between(start_dt_admin, end_dt_admin)
+            df_leads_filtered = df_leads.loc[mask_admin].copy()
+        else:
+            st.warning("created_at column missing; date filter not applied to admin data.")
+
+    # Create three columns for Admin dashboard (30% table, 30% chart, 40% empty)
+    left_col, mid_col, _ = st.columns([0.3, 0.3, 0.4])
+    
+    with left_col:
+        st.subheader("Source-wise Conversion (%)")
+        if not df_leads_filtered.empty and "source" in df_leads_filtered.columns:
+            # Clean the filtered data
+            df_leads_clean = df_leads_filtered.copy()
+            df_leads_clean["source"] = df_leads_clean["source"].astype(str).str.strip().replace("", "Unknown")
+            df_leads_clean["final_status"] = df_leads_clean["final_status"].astype(str).str.strip()
+            
+            # Get unique sources and their counts
+            source_counts = df_leads_clean["source"].value_counts()
+            
+            # Calculate won counts for each source
+            won_counts = []
+            for source in source_counts.index:
+                won_count = len(df_leads_clean[
+                    (df_leads_clean["source"] == source) & 
+                    (df_leads_clean["final_status"].str.lower() == "won")
+                ])
+                won_counts.append(won_count)
+            
+            # Create a DataFrame with sources, counts, won counts, and conversion percentage
+            sources_df = pd.DataFrame({
+                "Source": source_counts.index,
+                "Count": source_counts.values,
+                "Won": won_counts
+            })
+            
+            # Calculate conversion percentage (Won/Count * 100)
+            sources_df["Conversion %"] = (sources_df["Won"] / sources_df["Count"] * 100).round(2)
+            
+            # Sort by conversion percentage descending, then by count descending, then by source name
+            sources_df = sources_df.sort_values(["Conversion %", "Count", "Source"], ascending=[False, False, True])
+            
+            # Make Source the index and show it in the table
+            sources_df_display = sources_df.set_index("Source")
+            st.dataframe(sources_df_display, use_container_width=True, hide_index=False)
+        else:
+            st.info("No lead sources available to display.")
+
+    with mid_col:
+        st.subheader("Source-wise Lead Count")
+        if not df_leads_filtered.empty and "source" in df_leads_filtered.columns:
+            source_counts = (
+                df_leads_filtered["source"].astype(str).str.strip().replace("", "Unknown").value_counts()
+                .rename_axis("source").reset_index(name="count")
+                .sort_values("count", ascending=False)
+            )
+            total_count_admin_chart = int(source_counts["count"].sum()) or 1
+            source_counts["percent"] = source_counts["count"] / total_count_admin_chart
+            chart = (
+                alt.Chart(source_counts)
+                .mark_bar()
+                .encode(
+                    x=alt.X("source:N", sort="-y", title="Source"),
+                    y=alt.Y("count:Q", title="Count"),
+                    color=alt.Color("source:N", legend=None),
+                    tooltip=[
+                        alt.Tooltip("source:N", title="Source"),
+                        alt.Tooltip("count:Q", title="Count"),
+                        alt.Tooltip("percent:Q", title="Percent", format=".1%"),
+                    ],
+                )
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No lead sources available to display.")
+
+    # Pie chart removed per requirement; keeping only table and bar chart
+
+with tab2:
+    # Branch wise lead count section - only in PS Performance
+    st.subheader("Walkin (branch-wise)")
+
+    # Date filter controls (applies to aggregates below and preview) - 40% width
+    col_filter, col_empty_filter = st.columns([0.4, 0.6])
+    with col_filter:
+        filter_option = st.selectbox(
+            "Date filter (based on created_at)", ["MTD", "Today", "Custom Range", "All time"], index=0
+        )
 
     # Determine start/end datetimes (all in UTC)
     now_ts = pd.Timestamp.now(tz="UTC")
@@ -364,18 +493,21 @@ with col_branch_left:
     elif filter_option == "MTD":
         start_dt, end_dt = month_start, now_ts
     else:
-        col_start, col_end = st.columns(2)
-        with col_start:
-            custom_start = st.date_input("Start date", value=date.today().replace(day=1))
-        with col_end:
-            custom_end = st.date_input("End date", value=date.today())
+        # Custom date inputs also in 40% width
+        col_custom, col_empty_custom = st.columns([0.4, 0.6])
+        with col_custom:
+            col_start, col_end = st.columns(2)
+            with col_start:
+                custom_start = st.date_input("Start date", value=date.today().replace(day=1))
+            with col_end:
+                custom_end = st.date_input("End date", value=date.today())
         # Normalize to full-day range
         start_dt = pd.Timestamp(custom_start).tz_localize("UTC")
         end_dt = pd.Timestamp(custom_end).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
 
     # Apply created_at filter
     df_filtered = df.copy()
-    if filter_option != "None":
+    if filter_option != "All time":
         if not df.empty and "created_at" in df.columns:
             created_ts = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
             mask = created_ts.between(start_dt, end_dt)
@@ -383,165 +515,117 @@ with col_branch_left:
         else:
             st.warning("created_at column missing; date filter not applied.")
 
-    # Build summary table: unique branches and their row counts
-    if not df_filtered.empty and "branch" in df_filtered.columns:
-        unique_branches = (
-            pd.Series(sorted(df_filtered["branch"].dropna().astype(str).unique()))
-            .rename("branch")
-            .to_frame()
-        )
-        branch_counts = (
-            df_filtered["branch"].astype(str).value_counts().rename_axis("branch").reset_index(name="rows")
+        # Build summary table: unique branches and their row counts
+        if not df_filtered.empty and "branch" in df_filtered.columns:
+            unique_branches = (
+                pd.Series(sorted(df_filtered["branch"].dropna().astype(str).unique()))
+                .rename("branch")
+                .to_frame()
+            )
+            branch_counts = (
+                df_filtered["branch"].astype(str).value_counts().rename_axis("branch").reset_index(name="rows")
+            )
+            
+            # Count pending, won, and lost leads per branch
+            if "status" in df_filtered.columns:
+                pending_counts = (
+                    df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "pending"]
+                    .groupby("branch")
+                    .size()
+                    .rename_axis("branch")
+                    .reset_index(name="pending")
+                )
+                won_counts = (
+                    df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "won"]
+                    .groupby("branch")
+                    .size()
+                    .rename_axis("branch")
+                    .reset_index(name="won")
+                )
+                lost_counts = (
+                    df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "lost"]
+                    .groupby("branch")
+                    .size()
+                    .rename_axis("branch")
+                    .reset_index(name="lost")
+                )
+            else:
+                pending_counts = pd.DataFrame({"branch": [], "pending": []})
+                won_counts = pd.DataFrame({"branch": [], "won": []})
+                lost_counts = pd.DataFrame({"branch": [], "lost": []})
+
+            # Count touched/untouched leads per branch among Pending status
+            if "first_call_date" in df_filtered.columns and "status" in df_filtered.columns:
+                status_pending_mask = df_filtered["status"].astype(str).str.strip().str.lower() == "pending"
+                has_first_call_mask = df_filtered["first_call_date"].notna() & (df_filtered["first_call_date"].astype(str).str.strip() != "")
+                touched_mask = status_pending_mask & has_first_call_mask
+                untouched_mask = status_pending_mask & ~has_first_call_mask
+                touched_counts = (
+                    df_filtered[touched_mask]
+                    .groupby("branch")
+                    .size()
+                    .rename_axis("branch")
+                    .reset_index(name="touched")
+                )
+                untouched_counts = (
+                    df_filtered[untouched_mask]
+                    .groupby("branch")
+                    .size()
+                    .rename_axis("branch")
+                    .reset_index(name="untouched")
+                )
+            else:
+                touched_counts = pd.DataFrame({"branch": [], "touched": []})
+                untouched_counts = pd.DataFrame({"branch": [], "untouched": []})
+            
+            branches_table = unique_branches.merge(branch_counts, on="branch", how="left").fillna({"rows": 0})
+            branches_table = branches_table.merge(pending_counts, on="branch", how="left").fillna({"pending": 0})
+            branches_table = branches_table.merge(touched_counts, on="branch", how="left").fillna({"touched": 0})
+            branches_table = branches_table.merge(untouched_counts, on="branch", how="left").fillna({"untouched": 0})
+            branches_table = branches_table.merge(won_counts, on="branch", how="left").fillna({"won": 0})
+            branches_table = branches_table.merge(lost_counts, on="branch", how="left").fillna({"lost": 0})
+            branches_table["rows"] = branches_table["rows"].astype(int)
+            branches_table["pending"] = branches_table["pending"].astype(int)
+            branches_table["touched"] = branches_table["touched"].astype(int)
+            branches_table["untouched"] = branches_table["untouched"].astype(int)
+            branches_table["won"] = branches_table["won"].astype(int)
+            branches_table["lost"] = branches_table["lost"].astype(int)
+        else:
+            branches_table = pd.DataFrame({"branch": [], "rows": [], "pending": [], "touched": [], "untouched": [], "won": [], "lost": []})
+
+        # Order columns: branch, leads punched, pending, touched, untouched, won, lost (where available)
+        desired_order = ["branch", "rows", "pending", "touched", "untouched", "won", "lost"]
+        columns_in_order = [col for col in desired_order if col in branches_table.columns]
+        branches_table = branches_table[columns_in_order]
+        
+        # Set branch as index and rename columns
+        branches_table_display = branches_table.set_index("branch").rename(
+            columns={
+                "rows": "Punched",
+                "pending": "Pending",
+                "touched": "Touched",
+                "untouched": "Untouched",
+                "won": "Won",
+                "lost": "Lost",
+            }
         )
         
-        # Count pending, won, and lost leads per branch
-        if "status" in df_filtered.columns:
-            pending_counts = (
-                df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "pending"]
-                .groupby("branch")
-                .size()
-                .rename_axis("branch")
-                .reset_index(name="pending")
-            )
-            won_counts = (
-                df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "won"]
-                .groupby("branch")
-                .size()
-                .rename_axis("branch")
-                .reset_index(name="won")
-            )
-            lost_counts = (
-                df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "lost"]
-                .groupby("branch")
-                .size()
-                .rename_axis("branch")
-                .reset_index(name="lost")
-            )
-        else:
-            pending_counts = pd.DataFrame({"branch": [], "pending": []})
-            won_counts = pd.DataFrame({"branch": [], "won": []})
-            lost_counts = pd.DataFrame({"branch": [], "lost": []})
-
-        # Count touched/untouched leads per branch among Pending status
-        if "first_call_date" in df_filtered.columns and "status" in df_filtered.columns:
-            status_pending_mask = df_filtered["status"].astype(str).str.strip().str.lower() == "pending"
-            has_first_call_mask = df_filtered["first_call_date"].notna() & (df_filtered["first_call_date"].astype(str).str.strip() != "")
-            touched_mask = status_pending_mask & has_first_call_mask
-            untouched_mask = status_pending_mask & ~has_first_call_mask
-            touched_counts = (
-                df_filtered[touched_mask]
-                .groupby("branch")
-                .size()
-                .rename_axis("branch")
-                .reset_index(name="touched")
-            )
-            untouched_counts = (
-                df_filtered[untouched_mask]
-                .groupby("branch")
-                .size()
-                .rename_axis("branch")
-                .reset_index(name="untouched")
-            )
-        else:
-            touched_counts = pd.DataFrame({"branch": [], "touched": []})
-            untouched_counts = pd.DataFrame({"branch": [], "untouched": []})
+        # Add total row
+        if not branches_table_display.empty:
+            total_row = branches_table_display.sum()
+            total_row.name = "TOTAL"
+            branches_table_display = pd.concat([branches_table_display, total_row.to_frame().T])
         
-        branches_table = unique_branches.merge(branch_counts, on="branch", how="left").fillna({"rows": 0})
-        branches_table = branches_table.merge(pending_counts, on="branch", how="left").fillna({"pending": 0})
-        branches_table = branches_table.merge(touched_counts, on="branch", how="left").fillna({"touched": 0})
-        branches_table = branches_table.merge(untouched_counts, on="branch", how="left").fillna({"untouched": 0})
-        branches_table = branches_table.merge(won_counts, on="branch", how="left").fillna({"won": 0})
-        branches_table = branches_table.merge(lost_counts, on="branch", how="left").fillna({"lost": 0})
-        branches_table["rows"] = branches_table["rows"].astype(int)
-        branches_table["pending"] = branches_table["pending"].astype(int)
-        branches_table["touched"] = branches_table["touched"].astype(int)
-        branches_table["untouched"] = branches_table["untouched"].astype(int)
-        branches_table["won"] = branches_table["won"].astype(int)
-        branches_table["lost"] = branches_table["lost"].astype(int)
-    else:
-        branches_table = pd.DataFrame({"branch": [], "rows": [], "pending": [], "touched": [], "untouched": [], "won": [], "lost": []})
+        # Create columns to limit table width to 40% of space
+        col_table, col_empty = st.columns([0.4, 0.6])
+        with col_table:
+            st.dataframe(branches_table_display, use_container_width=True, hide_index=False)
 
-    st.subheader("Branch wise lead Count")
-    # Order columns: branch, leads punched, pending, touched, untouched, won, lost (where available)
-    desired_order = ["branch", "rows", "pending", "touched", "untouched", "won", "lost"]
-    columns_in_order = [col for col in desired_order if col in branches_table.columns]
-    branches_table = branches_table[columns_in_order]
-    branches_table_display = branches_table.rename(
-        columns={
-            "rows": "leads punched",
-            "pending": "pending leads",
-            "touched": "Touched leads",
-            "untouched": "untouched leads",
-            "won": "Won Leads",
-            "lost": "Lost Leads",
-        }
-    )
-    st.dataframe(branches_table_display, use_container_width=True, hide_index=True)
+        # Toggle to view/hide underlying raw data (respects selected date filter if applied)
+        show_underlying = st.toggle("View underlying data", value=False)
+        if show_underlying:
+            st.subheader("Walk-in Table")
+            st.dataframe(df_filtered, use_container_width=True)
 
-    # Toggle to view/hide underlying raw data (respects selected date filter if applied)
-    show_underlying = st.toggle("View underlying data", value=False)
-    if show_underlying:
-        st.subheader("Walk-in Table")
-        st.dataframe(df_filtered, use_container_width=True)
-
-# Leads by Source bar chart from lead_master at bottom, left 1/3 width
-left_col, mid_col, right_col = st.columns([1, 1, 1])
-with left_col:
-    st.subheader("Leads by Source")
-    try:
-        leads_res = supabase.table("lead_master").select("source").execute()
-        df_leads = pd.DataFrame(leads_res.data)
-        if not df_leads.empty and "source" in df_leads.columns:
-            source_counts = (
-                df_leads["source"].astype(str).str.strip().replace("", "Unknown").value_counts()
-                .rename_axis("source").reset_index(name="count")
-                .sort_values("count", ascending=False)
-            )
-            chart = (
-                alt.Chart(source_counts)
-                .mark_bar()
-                .encode(
-                    x=alt.X("source:N", sort="-y", title="Source"),
-                    y=alt.Y("count:Q", title="Count"),
-                    color=alt.Color("source:N", legend=None),
-                    tooltip=["source:N", "count:Q"],
-                )
-            )
-            st.altair_chart(chart, use_container_width=True)
-        else:
-            st.info("No lead sources available to display.")
-    except Exception as err:
-        st.warning(f"Could not load lead sources: {err}")
-
-with mid_col:
-    st.subheader("Leads by Source (%)")
-    try:
-        # Reuse data if already fetched above; otherwise fetch
-        if 'df_leads' not in locals():
-            leads_res = supabase.table("lead_master").select("source").execute()
-            df_leads = pd.DataFrame(leads_res.data)
-        if not df_leads.empty and "source" in df_leads.columns:
-            source_counts = (
-                df_leads["source"].astype(str).str.strip().replace("", "Unknown").value_counts()
-                .rename_axis("source").reset_index(name="count")
-            )
-            total_count = int(source_counts["count"].sum()) or 1
-            source_counts["percent"] = source_counts["count"] / total_count
-            pie = (
-                alt.Chart(source_counts)
-                .mark_arc()
-                .encode(
-                    theta=alt.Theta("count:Q", stack=True),
-                    color=alt.Color("source:N", title="Source"),
-                    tooltip=[
-                        alt.Tooltip("source:N", title="Source"),
-                        alt.Tooltip("count:Q", title="Count"),
-                        alt.Tooltip("percent:Q", title="Percent", format=".1%"),
-                    ],
-                )
-            )
-            st.altair_chart(pie, use_container_width=True)
-        else:
-            st.info("No lead sources available to display.")
-    except Exception as err:
-        st.warning(f"Could not load lead sources: {err}")
+with tab3:
+    pass
