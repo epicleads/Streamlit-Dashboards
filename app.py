@@ -1,6 +1,17 @@
 import os
 from dotenv import load_dotenv
 from supabase import create_client, Client
+import importlib
+AGGRID_AVAILABLE = False
+AgGrid = None
+GridOptionsBuilder = None
+try:
+    aggrid = importlib.import_module("st_aggrid")
+    AgGrid = getattr(aggrid, "AgGrid", None)
+    GridOptionsBuilder = getattr(aggrid, "GridOptionsBuilder", None)
+    AGGRID_AVAILABLE = AgGrid is not None and GridOptionsBuilder is not None
+except Exception:
+    AGGRID_AVAILABLE = False
 import streamlit as st
 import altair as alt
 import pandas as pd
@@ -30,6 +41,34 @@ st.markdown(
       h1 { font-size: 34px !important; margin-bottom: 0.5rem !important; }
       h2 { font-size: 26px !important; margin-bottom: 0.5rem !important; }
       h3 { font-size: 22px !important; margin-bottom: 0.25rem !important; }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+# Consistent numeric font for all KPI numbers (native st.metric and custom cards)
+st.markdown(
+    """
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
+    <style>
+      :root { --kpi-number-font: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji'; }
+      /* Streamlit metric value and delta */
+      [data-testid="stMetricValue"], [data-testid="stMetricDelta"] {
+        font-family: var(--kpi-number-font) !important;
+        font-variant-numeric: tabular-nums lining-nums;
+        font-feature-settings: "tnum" 1, "lnum" 1;
+        -webkit-font-smoothing: antialiased;
+      }
+      /* Custom KPI cards */
+      .won-metric-card .value-row .big,
+      .won-metric-card .value-row .small,
+      .won-metric-card .delta {
+        font-family: var(--kpi-number-font) !important;
+        font-variant-numeric: tabular-nums lining-nums;
+        font-feature-settings: "tnum" 1, "lnum" 1;
+      }
     </style>
     """,
     unsafe_allow_html=True,
@@ -299,7 +338,49 @@ with col_kpi_6:
         else:
             delta_won = "—"
 
-        st.metric(label="Won Leads", value=won_count, delta=delta_won)
+        # Compute total leads for percentage
+        q_total_leads = supabase.table("lead_master").select("id", count="exact")
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q_total_leads = q_total_leads.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        total_leads_resp = q_total_leads.execute()
+        total_leads_count = int(total_leads_resp.count or 0)
+        won_pct = (won_count / total_leads_count * 100.0) if total_leads_count else 0.0
+        pct_text_won = f"{won_pct:.2f}%"
+
+        # Render custom metric card matching Walkin Won style
+        delta_text_won = str(delta_won)
+        if delta_text_won.startswith("+"):
+            delta_class_won = "up"
+            arrow_won = "▲"
+        elif delta_text_won.startswith("-"):
+            delta_class_won = "down"
+            arrow_won = "▼"
+        else:
+            delta_class_won = "neutral"
+            arrow_won = "—"
+
+        custom_html_won = f"""
+        <div class=\"won-metric-card\">
+            <div class=\"label\">Won Leads</div>
+            <div class=\"value-row\">
+                <span class=\"big\">{won_count}</span>
+                <span class=\"small\">{pct_text_won}</span>
+            </div>
+            <div class=\"delta {delta_class_won}\">{arrow_won}&nbsp;{delta_text_won}</div>
+        </div>
+        <style>
+        .won-metric-card {{ display:inline-flex; flex-direction:column; gap:6px; }}
+        .won-metric-card .label {{ font-size:14px; opacity:0.85; }}
+        .won-metric-card .value-row {{ display:flex; align-items:baseline; gap:8px; }}
+        .won-metric-card .value-row .big {{ font-size:32px; font-weight:700; line-height:1; }}
+        .won-metric-card .value-row .small {{ font-size:13px; font-weight:600; color:#16a34a; line-height:1; }}
+        .won-metric-card .delta {{ width:max-content; font-size:13px; padding:4px 10px; border-radius:999px; }}
+        .won-metric-card .delta.up {{ background:rgba(34,197,94,0.15); color:#16a34a; }}
+        .won-metric-card .delta.down {{ background:rgba(239,68,68,0.15); color:#ef4444; }}
+        .won-metric-card .delta.neutral {{ background:rgba(156,163,175,0.15); color:#9aa0a6; }}
+        </style>
+        """
+        st.markdown(custom_html_won, unsafe_allow_html=True)
     except Exception as err:
         st.warning(f"Could not load KPI (Won Leads): {err}")
 
@@ -346,6 +427,14 @@ with col_kpi_8:
         curr_resp = q.execute()
         walkin_won_count = int(curr_resp.count or 0)
 
+        # Compute conversion percentage: (Walkin Won / Total Walkins) * 100
+        q_total_walkin = supabase.table("walkin_table").select("id", count="exact")
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q_total_walkin = q_total_walkin.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        total_walkin_resp = q_total_walkin.execute()
+        total_walkin_count = int(total_walkin_resp.count or 0)
+        walkin_won_pct = (walkin_won_count / total_walkin_count * 100.0) if total_walkin_count else 0.0
+
         if prev_start_global is not None and prev_end_global is not None:
             prev_q = (
                 supabase
@@ -365,7 +454,41 @@ with col_kpi_8:
         else:
             delta_walkin_won = "—"
 
-        st.metric(label="Walkin Won", value=walkin_won_count, delta=delta_walkin_won)
+        # Render custom metric card so the small percent can sit inline beside the big number
+        pct_text = f"{walkin_won_pct:.2f}%"
+        delta_text = str(delta_walkin_won)
+        if delta_text.startswith("+"):
+            delta_class = "up"
+            arrow = "▲"
+        elif delta_text.startswith("-"):
+            delta_class = "down"
+            arrow = "▼"
+        else:
+            delta_class = "neutral"
+            arrow = "—"
+
+        custom_html = f"""
+        <div class=\"won-metric-card\">
+            <div class=\"label\">Walkin Won</div>
+            <div class=\"value-row\">
+                <span class=\"big\">{walkin_won_count}</span>
+                <span class=\"small\">{pct_text}</span>
+            </div>
+            <div class=\"delta {delta_class}\">{arrow}&nbsp;{delta_text}</div>
+        </div>
+        <style>
+        .won-metric-card {{ display:inline-flex; flex-direction:column; gap:6px; }}
+        .won-metric-card .label {{ font-size:14px; opacity:0.85; }}
+        .won-metric-card .value-row {{ display:flex; align-items:baseline; gap:8px; }}
+        .won-metric-card .value-row .big {{ font-size:32px; font-weight:700; line-height:1; }}
+        .won-metric-card .value-row .small {{ font-size:13px; font-weight:600; color:#16a34a; line-height:1; }}
+        .won-metric-card .delta {{ width:max-content; font-size:13px; padding:4px 10px; border-radius:999px; }}
+        .won-metric-card .delta.up {{ background:rgba(34,197,94,0.15); color:#16a34a; }}
+        .won-metric-card .delta.down {{ background:rgba(239,68,68,0.15); color:#ef4444; }}
+        .won-metric-card .delta.neutral {{ background:rgba(156,163,175,0.15); color:#9aa0a6; }}
+        </style>
+        """
+        st.markdown(custom_html, unsafe_allow_html=True)
     except Exception as err:
         st.warning(f"Could not load KPI (Walkin Won): {err}")
 
@@ -761,49 +884,63 @@ with tab3:
                 & ((final_status_series == "pending") | (final_status_is_null))
             )
 
+            # Open leads: final_status == 'Pending' AND first_call_date is NOT NULL/empty
+            open_mask = (
+                (first_call_clean != "")
+                & (final_status_series == "pending")
+            )
+
             df_tmp = pd.DataFrame({
                 "CRE": cre_series,
                 "touched_flag": touched_mask.astype(int),
                 "ut_flag": ut_mask.astype(int),
                 "followup_flag": followup_mask.astype(int),
+                "open_flag": open_mask.astype(int),
             })
+            # Exclude Unassigned Leads from table and totals
+            df_tmp_valid = df_tmp[df_tmp["CRE"] != "Unassigned Leads"].copy()
             agg_counts = (
-                df_tmp
-                .groupby("CRE")[ ["touched_flag", "ut_flag", "followup_flag"] ]
+                df_tmp_valid
+                .groupby("CRE")[ ["touched_flag", "ut_flag", "followup_flag", "open_flag"] ]
                 .sum()
                 .astype(int)
                 .reset_index()
-                .rename(columns={"touched_flag": "Touched", "ut_flag": "UT", "followup_flag": "Followup"})
+                .rename(columns={"touched_flag": "Touched", "ut_flag": "UT", "followup_flag": "Followup", "open_flag": "Open leads"})
             )
 
             # Total leads assigned per CRE (row count per CRE)
             assigned_counts = (
-                df_tmp
+                df_tmp_valid
                 .groupby("CRE")
                 .size()
                 .reset_index(name="Assigned")
             )
 
             # Final CRE table: all unique CREs with Touched counts (fill missing with 0)
-            cre_names = pd.Series(sorted(cre_series.unique())).rename("CRE").to_frame()
+            cre_names = pd.Series(sorted(df_tmp_valid["CRE"].unique())).rename("CRE").to_frame()
             cre_table = (
                 cre_names
                 .merge(agg_counts, on="CRE", how="left")
                 .merge(assigned_counts, on="CRE", how="left")
-                .fillna({"Touched": 0, "UT": 0, "Followup": 0, "Assigned": 0})
+                .fillna({"Touched": 0, "UT": 0, "Followup": 0, "Open leads": 0, "Assigned": 0})
             )
             cre_table["Touched"] = cre_table["Touched"].astype(int)
             cre_table["UT"] = cre_table["UT"].astype(int)
             cre_table["Followup"] = cre_table["Followup"].astype(int)
             cre_table["Assigned"] = cre_table["Assigned"].astype(int)
+            if "Open leads" in cre_table.columns:
+                cre_table["Open leads"] = cre_table["Open leads"].astype(int)
 
             # Reorder columns and sort by Assigned descending
-            desired_order_cols = [c for c in ["CRE", "Assigned", "UT", "Touched", "Followup"] if c in cre_table.columns]
+            desired_order_cols = [c for c in ["CRE", "Assigned", "Open leads", "UT", "Touched", "Followup"] if c in cre_table.columns]
             cre_table = cre_table[desired_order_cols]
             if "Assigned" in cre_table.columns:
                 cre_table = cre_table.sort_values("Assigned", ascending=False)
 
-            cre_table_display = cre_table.set_index("CRE")
+            # Prepare pinned TOTAL row (within the same grid)
+            numeric_cols = [c for c in ["Assigned", "Open leads", "UT", "Touched", "Followup"] if c in cre_table.columns]
+            total_values = {c: int(cre_table[c].sum()) for c in numeric_cols}
+            total_row_dict = {**{"CRE": "TOTAL"}, **total_values}
 
             # Dynamically size the table so CRE names (index) are fully visible
             try:
@@ -814,8 +951,35 @@ with tab3:
             index_padding_px = 80
             other_columns_px = 280  # space for numeric columns
             desired_width = max(420, min(1200, per_char_px * max_cre_len + index_padding_px + other_columns_px))
-
-            st.dataframe(cre_table_display, use_container_width=False, width=desired_width, height=260, hide_index=False)
+            # Render a simple Streamlit table with TOTAL appended (classic view)
+            cre_table_with_total = pd.concat([cre_table, pd.DataFrame([total_row_dict])], ignore_index=True)
+            total_rows = int(len(cre_table_with_total))
+            row_px = 34
+            header_px = 38
+            padding_px = 12
+            computed_height = header_px + row_px * total_rows + padding_px
+            df_display = cre_table_with_total.copy()
+            try:
+                highlight_css = "background-color: #419D78; color: #ffffff; font-weight: 600;"
+                styled = df_display.style.apply(
+                    lambda row: [highlight_css] * len(row) if str(row.get("CRE", "")) == "TOTAL" else [""] * len(row),
+                    axis=1,
+                )
+                st.dataframe(
+                    styled,
+                    use_container_width=False,
+                    width=desired_width,
+                    height=computed_height,
+                    hide_index=True,
+                )
+            except Exception:
+                st.dataframe(
+                    df_display,
+                    use_container_width=False,
+                    width=desired_width,
+                    height=computed_height,
+                    hide_index=True,
+                )
         else:
             st.info("No CRE data available to display.")
     except Exception as err:
