@@ -399,10 +399,38 @@ with tab1:
         else:
             st.warning("created_at column missing; date filter not applied to admin data.")
 
-    # Create three columns for Admin dashboard (30% table, 30% chart, 40% empty)
-    left_col, mid_col, _ = st.columns([0.3, 0.3, 0.4])
+    # Create four columns for Admin dashboard (30% table, 5% spacer, 30% chart, 35% empty)
+    left_col, spacer_col, mid_col, _ = st.columns([0.3, 0.05, 0.3, 0.35])
     
     with left_col:
+        st.subheader("Source-wise Lead Count")
+        if not df_leads_filtered.empty and "source" in df_leads_filtered.columns:
+            source_counts = (
+                df_leads_filtered["source"].astype(str).str.strip().replace("", "Unknown").value_counts()
+                .rename_axis("source").reset_index(name="count")
+                .sort_values("count", ascending=False)
+            )
+            total_count_admin_chart = int(source_counts["count"].sum()) or 1
+            source_counts["percent"] = source_counts["count"] / total_count_admin_chart
+            chart = (
+                alt.Chart(source_counts)
+                .mark_bar()
+                .encode(
+                    x=alt.X("source:N", sort="-y", title=None),
+                    y=alt.Y("count:Q", title=None),
+                    color=alt.Color("source:N", legend=None),
+                    tooltip=[
+                        alt.Tooltip("source:N", title="Source"),
+                        alt.Tooltip("count:Q", title="Count"),
+                        alt.Tooltip("percent:Q", title="Percent", format=".1%"),
+                    ],
+                )
+            )
+            st.altair_chart(chart, use_container_width=True)
+        else:
+            st.info("No lead sources available to display.")
+
+    with mid_col:
         st.subheader("Source-wise Conversion (%)")
         if not df_leads_filtered.empty and "source" in df_leads_filtered.columns:
             # Clean the filtered data
@@ -438,34 +466,6 @@ with tab1:
             # Make Source the index and show it in the table
             sources_df_display = sources_df.set_index("Source")
             st.dataframe(sources_df_display, use_container_width=True, hide_index=False)
-        else:
-            st.info("No lead sources available to display.")
-
-    with mid_col:
-        st.subheader("Source-wise Lead Count")
-        if not df_leads_filtered.empty and "source" in df_leads_filtered.columns:
-            source_counts = (
-                df_leads_filtered["source"].astype(str).str.strip().replace("", "Unknown").value_counts()
-                .rename_axis("source").reset_index(name="count")
-                .sort_values("count", ascending=False)
-            )
-            total_count_admin_chart = int(source_counts["count"].sum()) or 1
-            source_counts["percent"] = source_counts["count"] / total_count_admin_chart
-            chart = (
-                alt.Chart(source_counts)
-                .mark_bar()
-                .encode(
-                    x=alt.X("source:N", sort="-y", title="Source"),
-                    y=alt.Y("count:Q", title="Count"),
-                    color=alt.Color("source:N", legend=None),
-                    tooltip=[
-                        alt.Tooltip("source:N", title="Source"),
-                        alt.Tooltip("count:Q", title="Count"),
-                        alt.Tooltip("percent:Q", title="Percent", format=".1%"),
-                    ],
-                )
-            )
-            st.altair_chart(chart, use_container_width=True)
         else:
             st.info("No lead sources available to display.")
 
