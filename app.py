@@ -395,8 +395,8 @@ with tab1:
         else:
             st.warning("created_at column missing; date filter not applied to admin data.")
 
-    # Create four columns for Admin dashboard (shift mid left, widen Walkin panel)
-    left_col, spacer_col, mid_col, right_col = st.columns([0.28, 0.02, 0.22, 0.48])
+    # Create four columns for Admin dashboard (shrink Conversion a bit, widen Walkin panel)
+    left_col, spacer_col, mid_col, right_col = st.columns([0.28, 0.02, 0.26, 0.44])
     
     with left_col:
         st.subheader("Source-wise Lead Count")
@@ -427,7 +427,7 @@ with tab1:
             st.info("No lead sources available to display.")
 
     with mid_col:
-        st.subheader("Source-wise Conversion (%)")
+        st.subheader("ETBR")
         if not df_leads_filtered.empty and "source" in df_leads_filtered.columns:
             # Clean the filtered data
             df_leads_clean = df_leads_filtered.copy()
@@ -474,12 +474,66 @@ with tab1:
                 else:
                     walkin_won = 0
 
+                # Compute Walkin TD total consistent with Walkin (branch-wise)
+                td_total_walkin = 0
+                if "test_drive_done" in df_walkin_admin.columns:
+                    tdd_series_mid = df_walkin_admin["test_drive_done"]
+                    if pd.api.types.is_bool_dtype(tdd_series_mid):
+                        td_mask_mid = tdd_series_mid.fillna(False)
+                    else:
+                        td_mask_mid = tdd_series_mid.astype(str).str.strip().str.lower().isin(["true", "yes", "1"])
+                    td_total_walkin = int(td_mask_mid.sum())
+
                 walkin_row = pd.DataFrame([
                     {"Source": "Walkin", "Count": walkin_total, "Won": walkin_won}
                 ])
                 sources_df = pd.concat([sources_df, walkin_row], ignore_index=True)
             except Exception as err:
                 st.warning(f"Could not append Walkin row: {err}")
+
+            # Enquiry per source for Conversion table (non-Walkin via lead_master ps_name not null; Walkin = total punched)
+            try:
+                enquiry_map_conv = {}
+                for src in list(sources_df["Source"]):
+                    if str(src).strip().lower() == "walkin":
+                        enquiry_map_conv[src] = int(walkin_total)
+                        continue
+                    q_conv = (
+                        supabase
+                        .table("lead_master")
+                        .select("id", count="exact")
+                        .not_.is_("ps_name", "null")
+                        .eq("source", src)
+                    )
+                    if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
+                        q_conv = q_conv.gte("created_at", start_dt_admin.isoformat()).lte("created_at", end_dt_admin.isoformat())
+                    r_conv = q_conv.execute()
+                    enquiry_map_conv[src] = int(r_conv.count or 0)
+                sources_df["Enquiry"] = sources_df["Source"].map(enquiry_map_conv).astype(int)
+            except Exception as err:
+                st.warning(f"Could not compute Enquiry for Conversion: {err}")
+
+            # TD per source for Conversion table (non-Walkin via lead_master test_drive_status; Walkin = TD total from Walkin table)
+            try:
+                td_map_conv = {}
+                for src in list(sources_df["Source"]):
+                    if str(src).strip().lower() == "walkin":
+                        td_map_conv[src] = int(td_total_walkin)
+                        continue
+                    q_td_conv = (
+                        supabase
+                        .table("lead_master")
+                        .select("id", count="exact")
+                        .eq("test_drive_status", True)
+                        .eq("source", src)
+                    )
+                    if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
+                        q_td_conv = q_td_conv.gte("created_at", start_dt_admin.isoformat()).lte("created_at", end_dt_admin.isoformat())
+                    r_td_conv = q_td_conv.execute()
+                    td_map_conv[src] = int(r_td_conv.count or 0)
+                sources_df["TD"] = sources_df["Source"].map(td_map_conv).astype(int)
+            except Exception as err:
+                st.warning(f"Could not compute TD for Conversion: {err}")
 
             # Calculate conversion percentage (Won/Count * 100)
             sources_df["%"] = (sources_df["Won"] / sources_df["Count"] * 100).round(2)
@@ -491,14 +545,24 @@ with tab1:
             sources_df_display = sources_df.set_index("Source")
             total_count_src = int(sources_df["Count"].sum())
             total_won_src = int(sources_df["Won"].sum())
+            total_enquiry_src = int(sources_df["Enquiry"].sum()) if "Enquiry" in sources_df.columns else 0
+            total_td_src = int(sources_df["TD"].sum()) if "TD" in sources_df.columns else 0
             total_conv_src = (total_won_src / total_count_src * 100.0) if total_count_src else 0.0
             total_row_src = pd.DataFrame({
                 "Count": [total_count_src],
+                "Enquiry": [total_enquiry_src],
+                "TD": [total_td_src],
                 "Won": [total_won_src],
                 "%": [round(total_conv_src, 2)],
             }, index=["TOTAL"])
             sources_df_display = pd.concat([sources_df_display, total_row_src])
-            st.dataframe(sources_df_display, use_container_width=True, hide_index=False)
+
+            # Display with Enquiry and TD columns right after Count; rename Count to E for display only
+            display_cols = [c for c in ["Count", "Enquiry", "TD", "Won", "%"] if c in sources_df_display.columns]
+            display_df = sources_df_display[display_cols].rename(columns={"Count": "E", "Enquiry": "QL", "Won": "BR"})
+            st.dataframe(display_df, use_container_width=True, hide_index=False)
+
+            
         else:
             st.info("No lead sources available to display.")
 
@@ -633,7 +697,7 @@ with tab1:
         st.dataframe(branches_table_display_admin, use_container_width=True, hide_index=False)
 
 with tab2:
-    st.info("Walkin (branch-wise) has been moved to the Admin tab next to Source-wise Conversion (%).")
+    st.info("Walkin (branch-wise) has been moved to the Admin tab next to ETBR.")
 
 with tab3:
     pass
