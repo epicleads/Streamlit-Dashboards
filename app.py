@@ -450,13 +450,41 @@ with tab1:
                 ])
                 won_counts.append(won_count)
             
-            # Create a DataFrame with sources, counts, won counts, and conversion percentage
+            # Create a DataFrame with sources, counts, won counts
             sources_df = pd.DataFrame({
                 "Source": source_counts.index,
                 "Count": source_counts.values,
                 "Won": won_counts
             })
-            
+
+            # Append special Walkin row from walkin_table using same admin filter
+            try:
+                df_walkin_admin = df.copy()
+                if (
+                    filter_option_admin != "All time"
+                    and start_dt_admin is not None
+                    and end_dt_admin is not None
+                    and "created_at" in df.columns
+                ):
+                    created_ts_walkin = pd.to_datetime(df["created_at"], errors="coerce", utc=True)
+                    mask_walkin = created_ts_walkin.between(start_dt_admin, end_dt_admin)
+                    df_walkin_admin = df.loc[mask_walkin].copy()
+
+                walkin_total = int(len(df_walkin_admin))
+                if "status" in df_walkin_admin.columns:
+                    walkin_won = int(
+                        (df_walkin_admin["status"].astype(str).str.strip().str.lower() == "won").sum()
+                    )
+                else:
+                    walkin_won = 0
+
+                walkin_row = pd.DataFrame([
+                    {"Source": "Walkin", "Count": walkin_total, "Won": walkin_won}
+                ])
+                sources_df = pd.concat([sources_df, walkin_row], ignore_index=True)
+            except Exception as err:
+                st.warning(f"Could not append Walkin row: {err}")
+
             # Calculate conversion percentage (Won/Count * 100)
             sources_df["Conversion %"] = (sources_df["Won"] / sources_df["Count"] * 100).round(2)
             
@@ -492,7 +520,7 @@ with tab2:
         start_dt, end_dt = today_start, today_end
     elif filter_option == "MTD":
         start_dt, end_dt = month_start, now_ts
-    else:
+    elif filter_option == "Custom Range":
         # Custom date inputs also in 40% width
         col_custom, col_empty_custom = st.columns([0.4, 0.6])
         with col_custom:
@@ -504,6 +532,9 @@ with tab2:
         # Normalize to full-day range
         start_dt = pd.Timestamp(custom_start).tz_localize("UTC")
         end_dt = pd.Timestamp(custom_end).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+    else:
+        # All time - no dates needed
+        start_dt, end_dt = None, None
 
     # Apply created_at filter
     df_filtered = df.copy()
@@ -515,111 +546,111 @@ with tab2:
         else:
             st.warning("created_at column missing; date filter not applied.")
 
-        # Build summary table: unique branches and their row counts
-        if not df_filtered.empty and "branch" in df_filtered.columns:
-            unique_branches = (
-                pd.Series(sorted(df_filtered["branch"].dropna().astype(str).unique()))
-                .rename("branch")
-                .to_frame()
-            )
-            branch_counts = (
-                df_filtered["branch"].astype(str).value_counts().rename_axis("branch").reset_index(name="rows")
-            )
-            
-            # Count pending, won, and lost leads per branch
-            if "status" in df_filtered.columns:
-                pending_counts = (
-                    df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "pending"]
-                    .groupby("branch")
-                    .size()
-                    .rename_axis("branch")
-                    .reset_index(name="pending")
-                )
-                won_counts = (
-                    df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "won"]
-                    .groupby("branch")
-                    .size()
-                    .rename_axis("branch")
-                    .reset_index(name="won")
-                )
-                lost_counts = (
-                    df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "lost"]
-                    .groupby("branch")
-                    .size()
-                    .rename_axis("branch")
-                    .reset_index(name="lost")
-                )
-            else:
-                pending_counts = pd.DataFrame({"branch": [], "pending": []})
-                won_counts = pd.DataFrame({"branch": [], "won": []})
-                lost_counts = pd.DataFrame({"branch": [], "lost": []})
-
-            # Count touched/untouched leads per branch among Pending status
-            if "first_call_date" in df_filtered.columns and "status" in df_filtered.columns:
-                status_pending_mask = df_filtered["status"].astype(str).str.strip().str.lower() == "pending"
-                has_first_call_mask = df_filtered["first_call_date"].notna() & (df_filtered["first_call_date"].astype(str).str.strip() != "")
-                touched_mask = status_pending_mask & has_first_call_mask
-                untouched_mask = status_pending_mask & ~has_first_call_mask
-                touched_counts = (
-                    df_filtered[touched_mask]
-                    .groupby("branch")
-                    .size()
-                    .rename_axis("branch")
-                    .reset_index(name="touched")
-                )
-                untouched_counts = (
-                    df_filtered[untouched_mask]
-                    .groupby("branch")
-                    .size()
-                    .rename_axis("branch")
-                    .reset_index(name="untouched")
-                )
-            else:
-                touched_counts = pd.DataFrame({"branch": [], "touched": []})
-                untouched_counts = pd.DataFrame({"branch": [], "untouched": []})
-            
-            branches_table = unique_branches.merge(branch_counts, on="branch", how="left").fillna({"rows": 0})
-            branches_table = branches_table.merge(pending_counts, on="branch", how="left").fillna({"pending": 0})
-            branches_table = branches_table.merge(touched_counts, on="branch", how="left").fillna({"touched": 0})
-            branches_table = branches_table.merge(untouched_counts, on="branch", how="left").fillna({"untouched": 0})
-            branches_table = branches_table.merge(won_counts, on="branch", how="left").fillna({"won": 0})
-            branches_table = branches_table.merge(lost_counts, on="branch", how="left").fillna({"lost": 0})
-            branches_table["rows"] = branches_table["rows"].astype(int)
-            branches_table["pending"] = branches_table["pending"].astype(int)
-            branches_table["touched"] = branches_table["touched"].astype(int)
-            branches_table["untouched"] = branches_table["untouched"].astype(int)
-            branches_table["won"] = branches_table["won"].astype(int)
-            branches_table["lost"] = branches_table["lost"].astype(int)
-        else:
-            branches_table = pd.DataFrame({"branch": [], "rows": [], "pending": [], "touched": [], "untouched": [], "won": [], "lost": []})
-
-        # Order columns: branch, leads punched, pending, touched, untouched, won, lost (where available)
-        desired_order = ["branch", "rows", "pending", "touched", "untouched", "won", "lost"]
-        columns_in_order = [col for col in desired_order if col in branches_table.columns]
-        branches_table = branches_table[columns_in_order]
-        
-        # Set branch as index and rename columns
-        branches_table_display = branches_table.set_index("branch").rename(
-            columns={
-                "rows": "Punched",
-                "pending": "Pending",
-                "touched": "Touched",
-                "untouched": "Untouched",
-                "won": "Won",
-                "lost": "Lost",
-            }
+    # Build summary table: unique branches and their row counts (always using df_filtered)
+    if not df_filtered.empty and "branch" in df_filtered.columns:
+        unique_branches = (
+            pd.Series(sorted(df_filtered["branch"].dropna().astype(str).unique()))
+            .rename("branch")
+            .to_frame()
+        )
+        branch_counts = (
+            df_filtered["branch"].astype(str).value_counts().rename_axis("branch").reset_index(name="rows")
         )
         
-        # Add total row
-        if not branches_table_display.empty:
-            total_row = branches_table_display.sum()
-            total_row.name = "TOTAL"
-            branches_table_display = pd.concat([branches_table_display, total_row.to_frame().T])
+        # Count pending, won, and lost leads per branch
+        if "status" in df_filtered.columns:
+            pending_counts = (
+                df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "pending"]
+                .groupby("branch")
+                .size()
+                .rename_axis("branch")
+                .reset_index(name="pending")
+            )
+            won_counts = (
+                df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "won"]
+                .groupby("branch")
+                .size()
+                .rename_axis("branch")
+                .reset_index(name="won")
+            )
+            lost_counts = (
+                df_filtered[df_filtered["status"].astype(str).str.strip().str.lower() == "lost"]
+                .groupby("branch")
+                .size()
+                .rename_axis("branch")
+                .reset_index(name="lost")
+            )
+        else:
+            pending_counts = pd.DataFrame({"branch": [], "pending": []})
+            won_counts = pd.DataFrame({"branch": [], "won": []})
+            lost_counts = pd.DataFrame({"branch": [], "lost": []})
         
-        # Create columns to limit table width to 40% of space
-        col_table, col_empty = st.columns([0.4, 0.6])
-        with col_table:
-            st.dataframe(branches_table_display, use_container_width=True, hide_index=False)
+        # Count touched/untouched leads per branch among Pending status
+        if "first_call_date" in df_filtered.columns and "status" in df_filtered.columns:
+            status_pending_mask = df_filtered["status"].astype(str).str.strip().str.lower() == "pending"
+            has_first_call_mask = df_filtered["first_call_date"].notna() & (df_filtered["first_call_date"].astype(str).str.strip() != "")
+            touched_mask = status_pending_mask & has_first_call_mask
+            untouched_mask = status_pending_mask & ~has_first_call_mask
+            touched_counts = (
+                df_filtered[touched_mask]
+                .groupby("branch")
+                .size()
+                .rename_axis("branch")
+                .reset_index(name="touched")
+            )
+            untouched_counts = (
+                df_filtered[untouched_mask]
+                .groupby("branch")
+                .size()
+                .rename_axis("branch")
+                .reset_index(name="untouched")
+            )
+        else:
+            touched_counts = pd.DataFrame({"branch": [], "touched": []})
+            untouched_counts = pd.DataFrame({"branch": [], "untouched": []})
+        
+        branches_table = unique_branches.merge(branch_counts, on="branch", how="left").fillna({"rows": 0})
+        branches_table = branches_table.merge(pending_counts, on="branch", how="left").fillna({"pending": 0})
+        branches_table = branches_table.merge(touched_counts, on="branch", how="left").fillna({"touched": 0})
+        branches_table = branches_table.merge(untouched_counts, on="branch", how="left").fillna({"untouched": 0})
+        branches_table = branches_table.merge(won_counts, on="branch", how="left").fillna({"won": 0})
+        branches_table = branches_table.merge(lost_counts, on="branch", how="left").fillna({"lost": 0})
+        branches_table["rows"] = branches_table["rows"].astype(int)
+        branches_table["pending"] = branches_table["pending"].astype(int)
+        branches_table["touched"] = branches_table["touched"].astype(int)
+        branches_table["untouched"] = branches_table["untouched"].astype(int)
+        branches_table["won"] = branches_table["won"].astype(int)
+        branches_table["lost"] = branches_table["lost"].astype(int)
+    else:
+        branches_table = pd.DataFrame({"branch": [], "rows": [], "pending": [], "touched": [], "untouched": [], "won": [], "lost": []})
+
+    # Order columns: branch, leads punched, pending, touched, untouched, won, lost (where available)
+    desired_order = ["branch", "rows", "pending", "touched", "untouched", "won", "lost"]
+    columns_in_order = [col for col in desired_order if col in branches_table.columns]
+    branches_table = branches_table[columns_in_order]
+    
+    # Set branch as index and rename columns
+    branches_table_display = branches_table.set_index("branch").rename(
+        columns={
+            "rows": "Punched",
+            "pending": "Pending",
+            "touched": "Touched",
+            "untouched": "Untouched",
+            "won": "Won",
+            "lost": "Lost",
+        }
+    )
+    
+    # Add total row
+    if not branches_table_display.empty:
+        total_row = branches_table_display.sum()
+        total_row.name = "TOTAL"
+        branches_table_display = pd.concat([branches_table_display, total_row.to_frame().T])
+    
+    # Create columns to limit table width to 40% of space
+    col_table, col_empty = st.columns([0.4, 0.6])
+    with col_table:
+        st.dataframe(branches_table_display, use_container_width=True, hide_index=False)
 
         # Toggle to view/hide underlying raw data (respects selected date filter if applied)
         show_underlying = st.toggle("View underlying data", value=False)
