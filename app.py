@@ -700,4 +700,123 @@ with tab2:
     st.info("Walkin (branch-wise) has been moved to the Admin tab next to ETBR.")
 
 with tab3:
-    pass
+    st.subheader("CRE Performance")
+    try:
+        # Fetch CRE data (and created_at for filtering) from lead_master
+        cre_res = (
+            supabase
+            .table("lead_master")
+            .select("cre_name", "created_at", "lead_status", "first_call_date", "final_status")
+            .execute()
+        )
+        df_cre = pd.DataFrame(cre_res.data)
+
+        # Apply global date filter if available
+        df_cre_filtered = df_cre.copy()
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            if not df_cre.empty and "created_at" in df_cre.columns:
+                created_ts_cre = pd.to_datetime(df_cre["created_at"], errors="coerce", utc=True)
+                mask_cre = created_ts_cre.between(start_dt_global, end_dt_global)
+                df_cre_filtered = df_cre.loc[mask_cre].copy()
+
+        # Build table with first column as CRE names and Touched/UT counts
+        if not df_cre_filtered.empty and "cre_name" in df_cre_filtered.columns:
+            # Normalize CRE names
+            cre_series = (
+                df_cre_filtered["cre_name"].fillna("").astype(str).str.strip().replace("", "Unassigned Leads")
+            )
+
+            # Derive Touched mask per provided criteria
+            lead_status_series = df_cre_filtered.get("lead_status", pd.Series(dtype=object)).fillna("").astype(str).str.strip().str.lower()
+            final_status_series = df_cre_filtered.get("final_status", pd.Series(dtype=object)).fillna("").astype(str).str.strip().str.lower()
+            first_call_clean = df_cre_filtered.get("first_call_date", pd.Series(dtype=object)).fillna("").astype(str).str.strip()
+            final_status_is_null = df_cre_filtered["final_status"].isna() if "final_status" in df_cre_filtered.columns else pd.Series(False, index=df_cre_filtered.index)
+
+            touched_statuses = {
+                "rnr",
+                "busy on another call",
+                "call disconnected",
+                "call not connected",
+            }
+
+            touched_mask = (
+                lead_status_series.isin(touched_statuses)
+                & (first_call_clean == "")
+                & (final_status_series == "pending")
+            )
+
+            # Derive UT mask per provided SQL:
+            # first_call_date is null/empty AND lead_status == 'Pending' AND (final_status == 'Pending' OR final_status is null)
+            ut_mask = (
+                (first_call_clean == "")
+                & (lead_status_series == "pending")
+                & ((final_status_series == "pending") | (final_status_is_null))
+            )
+
+            # Derive Followup mask per provided SQL:
+            # first_call_date is null/empty AND lead_status == 'Call me Back' AND (final_status == 'Pending' OR final_status is null)
+            followup_mask = (
+                (first_call_clean == "")
+                & (lead_status_series == "call me back")
+                & ((final_status_series == "pending") | (final_status_is_null))
+            )
+
+            df_tmp = pd.DataFrame({
+                "CRE": cre_series,
+                "touched_flag": touched_mask.astype(int),
+                "ut_flag": ut_mask.astype(int),
+                "followup_flag": followup_mask.astype(int),
+            })
+            agg_counts = (
+                df_tmp
+                .groupby("CRE")[ ["touched_flag", "ut_flag", "followup_flag"] ]
+                .sum()
+                .astype(int)
+                .reset_index()
+                .rename(columns={"touched_flag": "Touched", "ut_flag": "UT", "followup_flag": "Followup"})
+            )
+
+            # Total leads assigned per CRE (row count per CRE)
+            assigned_counts = (
+                df_tmp
+                .groupby("CRE")
+                .size()
+                .reset_index(name="Assigned")
+            )
+
+            # Final CRE table: all unique CREs with Touched counts (fill missing with 0)
+            cre_names = pd.Series(sorted(cre_series.unique())).rename("CRE").to_frame()
+            cre_table = (
+                cre_names
+                .merge(agg_counts, on="CRE", how="left")
+                .merge(assigned_counts, on="CRE", how="left")
+                .fillna({"Touched": 0, "UT": 0, "Followup": 0, "Assigned": 0})
+            )
+            cre_table["Touched"] = cre_table["Touched"].astype(int)
+            cre_table["UT"] = cre_table["UT"].astype(int)
+            cre_table["Followup"] = cre_table["Followup"].astype(int)
+            cre_table["Assigned"] = cre_table["Assigned"].astype(int)
+
+            # Reorder columns and sort by Assigned descending
+            desired_order_cols = [c for c in ["CRE", "Assigned", "UT", "Touched", "Followup"] if c in cre_table.columns]
+            cre_table = cre_table[desired_order_cols]
+            if "Assigned" in cre_table.columns:
+                cre_table = cre_table.sort_values("Assigned", ascending=False)
+
+            cre_table_display = cre_table.set_index("CRE")
+
+            # Dynamically size the table so CRE names (index) are fully visible
+            try:
+                max_cre_len = int(cre_table["CRE"].astype(str).str.len().max()) if not cre_table.empty else 10
+            except Exception:
+                max_cre_len = 10
+            per_char_px = 9  # approximate px per character in default font
+            index_padding_px = 80
+            other_columns_px = 280  # space for numeric columns
+            desired_width = max(420, min(1200, per_char_px * max_cre_len + index_padding_px + other_columns_px))
+
+            st.dataframe(cre_table_display, use_container_width=False, width=desired_width, height=260, hide_index=False)
+        else:
+            st.info("No CRE data available to display.")
+    except Exception as err:
+        st.warning(f"Could not load CRE Performance data: {err}")
