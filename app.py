@@ -641,14 +641,26 @@ with tab2:
         }
     )
     
+    # Add Conversion (%) column = Won / Punched * 100 (safe divide)
+    if not branches_table_display.empty:
+        safe_div = branches_table_display.apply(
+            lambda row: (row["Won"] / row["Punched"] * 100.0) if row["Punched"] else 0.0,
+            axis=1
+        )
+        branches_table_display["Conversion (%)"] = safe_div.round(2)
+    
     # Add total row
     if not branches_table_display.empty:
-        total_row = branches_table_display.sum()
+        # Compute totals for numeric columns except Conversion (%) then compute total conversion from totals
+        numeric_cols = [c for c in ["Punched", "Pending", "Touched", "Untouched", "Won", "Lost"] if c in branches_table_display.columns]
+        total_row = branches_table_display[numeric_cols].sum()
+        total_row["Conversion (%)"] = (total_row["Won"] / total_row["Punched"] * 100.0) if total_row["Punched"] else 0.0
+        total_row = total_row.round(2)
         total_row.name = "TOTAL"
         branches_table_display = pd.concat([branches_table_display, total_row.to_frame().T])
     
-    # Create columns to limit table width to 40% of space
-    col_table, col_empty = st.columns([0.4, 0.6])
+    # Create columns to limit table width to 50% of space
+    col_table, col_empty = st.columns([0.5, 0.5])
     with col_table:
         st.dataframe(branches_table_display, use_container_width=True, hide_index=False)
 
