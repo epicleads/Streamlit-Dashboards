@@ -44,307 +44,328 @@ if "_printed_local_url" not in st.session_state:
 
 st.title("Analytics Dashboard")
 
+# Global date filter (applies to KPIs and dashboards)
+col_filter_global, col_empty_filter_global = st.columns([0.2, 0.8])
+with col_filter_global:
+    filter_option_global = st.selectbox(
+        "Date filter (based on created_at)",
+        ["MTD", "Today", "Custom Range", "All time"],
+        index=0,
+        key="global_filter"
+    )
+
+# Compute global start/end datetimes (UTC)
+now_ts_global = pd.Timestamp.now(tz="UTC")
+today_start_global = pd.Timestamp(date.today()).tz_localize("UTC")
+today_end_global = today_start_global + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+month_start_global = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
+
+if filter_option_global == "Today":
+    start_dt_global, end_dt_global = today_start_global, today_end_global
+elif filter_option_global == "MTD":
+    start_dt_global, end_dt_global = month_start_global, now_ts_global
+elif filter_option_global == "Custom Range":
+    col_custom_global, col_empty_custom_global = st.columns([0.2, 0.8])
+    with col_custom_global:
+        col_start_global, col_end_global = st.columns(2)
+        with col_start_global:
+            custom_start_global = st.date_input("Start date", value=date.today().replace(day=1), key="global_start")
+        with col_end_global:
+            custom_end_global = st.date_input("End date", value=date.today(), key="global_end")
+    start_dt_global = pd.Timestamp(custom_start_global).tz_localize("UTC")
+    end_dt_global = pd.Timestamp(custom_end_global).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
+else:
+    start_dt_global, end_dt_global = None, None
+
+# Compute previous period for delta comparison
+prev_start_global, prev_end_global = None, None
+if filter_option_global == "MTD":
+    prev_start_global = month_start_global - pd.offsets.MonthBegin(1)
+    prev_end_global = month_start_global - pd.Timedelta(milliseconds=1)
+elif filter_option_global == "Today":
+    prev_start_global = today_start_global - pd.Timedelta(days=1)
+    prev_end_global = today_end_global - pd.Timedelta(days=1)
+elif filter_option_global == "Custom Range":
+    if start_dt_global is not None and end_dt_global is not None:
+        duration = end_dt_global - start_dt_global + pd.Timedelta(milliseconds=1)
+        prev_end_global = start_dt_global - pd.Timedelta(milliseconds=1)
+        prev_start_global = prev_end_global - duration + pd.Timedelta(milliseconds=1)
+
 # KPI cards (top): All in one row
 col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6, col_kpi_7, col_kpi_8 = st.columns(8)
 with col_kpi_1:
     try:
-        # Define UTC time boundaries matching SQL semantics
-        now_ts_kpi = pd.Timestamp.now(tz="UTC")
-        month_start_kpi = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start = month_start_kpi - pd.offsets.MonthBegin(1)
+        q = supabase.table("lead_master").select("id", count="exact")
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        curr_count = int(curr_resp.count or 0)
 
-        # Query counts directly from DB to avoid client-side timezone differences
-        mtd_resp = (
-            supabase
-            .table("lead_master")
-            .select("id", count="exact")
-            .gte("created_at", month_start_kpi.isoformat())
-            .lt("created_at", now_ts_kpi.isoformat())
-            .execute()
-        )
-        mtd_count = int(mtd_resp.count or 0)
-
-        prev_resp = (
-            supabase
-            .table("lead_master")
-            .select("id", count="exact")
-            .gte("created_at", prev_month_start.isoformat())
-            .lt("created_at", month_start_kpi.isoformat())
-            .execute()
-        )
-        prev_count = int(prev_resp.count or 0)
-
-        if prev_count == 0:
-            delta_str = "+∞%" if mtd_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("lead_master")
+                .select("id", count="exact")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_count = int(prev_q.count or 0)
+            if prev_count == 0:
+                delta_str = "+∞%" if curr_count > 0 else "0%"
+            else:
+                pct_change = (curr_count - prev_count) / prev_count * 100.0
+                delta_str = f"{pct_change:+.1f}%"
         else:
-            pct_change = (mtd_count - prev_count) / prev_count * 100.0
-            delta_str = f"{pct_change:+.1f}%"
+            delta_str = "—"
 
-        st.metric(label="Leads (MTD)", value=mtd_count, delta=delta_str)
+        st.metric(label="Leads", value=curr_count, delta=delta_str)
     except Exception as err:
-        st.warning(f"Could not load KPI (Leads MTD): {err}")
+        st.warning(f"Could not load KPI (Leads): {err}")
 
 with col_kpi_2:
     try:
-        now_ts_kpi2 = pd.Timestamp.now(tz="UTC")
-        month_start_kpi2 = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start2 = month_start_kpi2 - pd.offsets.MonthBegin(1)
-
-        assigned_resp = (
+        q = (
             supabase
             .table("lead_master")
             .select("id", count="exact")
             .not_.is_("cre_name", "null")
-            .gte("created_at", month_start_kpi2.isoformat())
-            .lte("created_at", now_ts_kpi2.isoformat())
-            .execute()
         )
-        assigned_count = int(assigned_resp.count or 0)
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        assigned_count = int(curr_resp.count or 0)
 
-        prev_assigned_resp = (
-            supabase
-            .table("lead_master")
-            .select("id", count="exact")
-            .not_.is_("cre_name", "null")
-            .gte("created_at", prev_month_start2.isoformat())
-            .lt("created_at", month_start_kpi2.isoformat())
-            .execute()
-        )
-        prev_assigned_count = int(prev_assigned_resp.count or 0)
-
-        if prev_assigned_count == 0:
-            delta2 = "+∞%" if assigned_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("lead_master")
+                .select("id", count="exact")
+                .not_.is_("cre_name", "null")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_assigned_count = int(prev_q.count or 0)
+            if prev_assigned_count == 0:
+                delta2 = "+∞%" if assigned_count > 0 else "0%"
+            else:
+                pct_change2 = (assigned_count - prev_assigned_count) / prev_assigned_count * 100.0
+                delta2 = f"{pct_change2:+.1f}%"
         else:
-            pct_change2 = (assigned_count - prev_assigned_count) / prev_assigned_count * 100.0
-            delta2 = f"{pct_change2:+.1f}%"
+            delta2 = "—"
 
-        st.metric(label="Assigned to CRE (MTD)", value=assigned_count, delta=delta2)
+        st.metric(label="Assigned to CRE", value=assigned_count, delta=delta2)
     except Exception as err:
         st.warning(f"Could not load KPI (Assigned to CRE): {err}")
 
 with col_kpi_3:
     try:
-        now_ts_kpi3 = pd.Timestamp.now(tz="UTC")
-        month_start_kpi3 = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start3 = month_start_kpi3 - pd.offsets.MonthBegin(1)
-
-        ps_resp = (
+        q = (
             supabase
             .table("lead_master")
             .select("id", count="exact")
             .not_.is_("ps_name", "null")
-            .gte("created_at", month_start_kpi3.isoformat())
-            .lte("created_at", now_ts_kpi3.isoformat())
-            .execute()
         )
-        ps_count = int(ps_resp.count or 0)
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        ps_count = int(curr_resp.count or 0)
 
-        prev_ps_resp = (
-            supabase
-            .table("lead_master")
-            .select("id", count="exact")
-            .not_.is_("ps_name", "null")
-            .gte("created_at", prev_month_start3.isoformat())
-            .lt("created_at", month_start_kpi3.isoformat())
-            .execute()
-        )
-        prev_ps_count = int(prev_ps_resp.count or 0)
-
-        if prev_ps_count == 0:
-            delta3 = "+∞%" if ps_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("lead_master")
+                .select("id", count="exact")
+                .not_.is_("ps_name", "null")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_ps_count = int(prev_q.count or 0)
+            if prev_ps_count == 0:
+                delta3 = "+∞%" if ps_count > 0 else "0%"
+            else:
+                pct_change3 = (ps_count - prev_ps_count) / prev_ps_count * 100.0
+                delta3 = f"{pct_change3:+.1f}%"
         else:
-            pct_change3 = (ps_count - prev_ps_count) / prev_ps_count * 100.0
-            delta3 = f"{pct_change3:+.1f}%"
+            delta3 = "—"
 
-        st.metric(label="Assigned to PS (MTD)", value=ps_count, delta=delta3)
+        st.metric(label="Assigned to PS", value=ps_count, delta=delta3)
     except Exception as err:
         st.warning(f"Could not load KPI (Assigned to PS): {err}")
 
 with col_kpi_4:
     try:
-        now_ts_pend = pd.Timestamp.now(tz="UTC")
-        month_start_pend = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start_pend = month_start_pend - pd.offsets.MonthBegin(1)
-
-        pending_resp = (
+        q = (
             supabase
             .table("lead_master")
             .select("id", count="exact")
             .eq("final_status", "Pending")
-            .gte("created_at", month_start_pend.isoformat())
-            .lte("created_at", now_ts_pend.isoformat())
-            .execute()
         )
-        pending_count = int(pending_resp.count or 0)
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        pending_count = int(curr_resp.count or 0)
 
-        prev_pending_resp = (
-            supabase
-            .table("lead_master")
-            .select("id", count="exact")
-            .eq("final_status", "Pending")
-            .gte("created_at", prev_month_start_pend.isoformat())
-            .lt("created_at", month_start_pend.isoformat())
-            .execute()
-        )
-        prev_pending_count = int(prev_pending_resp.count or 0)
-
-        if prev_pending_count == 0:
-            delta_pend = "+∞%" if pending_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("lead_master")
+                .select("id", count="exact")
+                .eq("final_status", "Pending")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_pending_count = int(prev_q.count or 0)
+            if prev_pending_count == 0:
+                delta_pend = "+∞%" if pending_count > 0 else "0%"
+            else:
+                pct_change_pend = (pending_count - prev_pending_count) / prev_pending_count * 100.0
+                delta_pend = f"{pct_change_pend:+.1f}%"
         else:
-            pct_change_pend = (pending_count - prev_pending_count) / prev_pending_count * 100.0
-            delta_pend = f"{pct_change_pend:+.1f}%"
+            delta_pend = "—"
 
-        st.metric(label="Pending Leads (MTD)", value=pending_count, delta=delta_pend)
+        st.metric(label="Pending Leads", value=pending_count, delta=delta_pend)
     except Exception as err:
         st.warning(f"Could not load KPI (Pending Leads): {err}")
 
 with col_kpi_5:
     try:
-        now_ts_lost = pd.Timestamp.now(tz="UTC")
-        month_start_lost = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start_lost = month_start_lost - pd.offsets.MonthBegin(1)
-
-        lost_resp = (
+        q = (
             supabase
             .table("lead_master")
             .select("id", count="exact")
             .eq("final_status", "Lost")
-            .gte("created_at", month_start_lost.isoformat())
-            .lte("created_at", now_ts_lost.isoformat())
-            .execute()
         )
-        lost_count = int(lost_resp.count or 0)
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        lost_count = int(curr_resp.count or 0)
 
-        prev_lost_resp = (
-            supabase
-            .table("lead_master")
-            .select("id", count="exact")
-            .eq("final_status", "Lost")
-            .gte("created_at", prev_month_start_lost.isoformat())
-            .lt("created_at", month_start_lost.isoformat())
-            .execute()
-        )
-        prev_lost_count = int(prev_lost_resp.count or 0)
-
-        if prev_lost_count == 0:
-            delta_lost = "+∞%" if lost_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("lead_master")
+                .select("id", count="exact")
+                .eq("final_status", "Lost")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_lost_count = int(prev_q.count or 0)
+            if prev_lost_count == 0:
+                delta_lost = "+∞%" if lost_count > 0 else "0%"
+            else:
+                pct_change_lost = (lost_count - prev_lost_count) / prev_lost_count * 100.0
+                delta_lost = f"{pct_change_lost:+.1f}%"
         else:
-            pct_change_lost = (lost_count - prev_lost_count) / prev_lost_count * 100.0
-            delta_lost = f"{pct_change_lost:+.1f}%"
+            delta_lost = "—"
 
-        st.metric(label="Lost Leads (MTD)", value=lost_count, delta=delta_lost)
+        st.metric(label="Lost Leads", value=lost_count, delta=delta_lost)
     except Exception as err:
         st.warning(f"Could not load KPI (Lost Leads): {err}")
 
 with col_kpi_6:
     try:
-        now_ts_won = pd.Timestamp.now(tz="UTC")
-        month_start_won = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start_won = month_start_won - pd.offsets.MonthBegin(1)
-
-        won_resp = (
+        q = (
             supabase
             .table("lead_master")
             .select("id", count="exact")
             .eq("final_status", "Won")
-            .gte("created_at", month_start_won.isoformat())
-            .lte("created_at", now_ts_won.isoformat())
-            .execute()
         )
-        won_count = int(won_resp.count or 0)
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        won_count = int(curr_resp.count or 0)
 
-        prev_won_resp = (
-            supabase
-            .table("lead_master")
-            .select("id", count="exact")
-            .eq("final_status", "Won")
-            .gte("created_at", prev_month_start_won.isoformat())
-            .lt("created_at", month_start_won.isoformat())
-            .execute()
-        )
-        prev_won_count = int(prev_won_resp.count or 0)
-
-        if prev_won_count == 0:
-            delta_won = "+∞%" if won_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("lead_master")
+                .select("id", count="exact")
+                .eq("final_status", "Won")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_won_count = int(prev_q.count or 0)
+            if prev_won_count == 0:
+                delta_won = "+∞%" if won_count > 0 else "0%"
+            else:
+                pct_change_won = (won_count - prev_won_count) / prev_won_count * 100.0
+                delta_won = f"{pct_change_won:+.1f}%"
         else:
-            pct_change_won = (won_count - prev_won_count) / prev_won_count * 100.0
-            delta_won = f"{pct_change_won:+.1f}%"
+            delta_won = "—"
 
-        st.metric(label="Won Leads (MTD)", value=won_count, delta=delta_won)
+        st.metric(label="Won Leads", value=won_count, delta=delta_won)
     except Exception as err:
         st.warning(f"Could not load KPI (Won Leads): {err}")
 
 with col_kpi_7:
     try:
-        now_ts_walkin = pd.Timestamp.now(tz="UTC")
-        month_start_walkin = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start_walkin = month_start_walkin - pd.offsets.MonthBegin(1)
+        q = supabase.table("walkin_table").select("id", count="exact")
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        walkin_count = int(curr_resp.count or 0)
 
-        walkin_resp = (
-            supabase
-            .table("walkin_table")
-            .select("id", count="exact")
-            .gte("created_at", month_start_walkin.isoformat())
-            .lte("created_at", now_ts_walkin.isoformat())
-            .execute()
-        )
-        walkin_count = int(walkin_resp.count or 0)
-
-        prev_walkin_resp = (
-            supabase
-            .table("walkin_table")
-            .select("id", count="exact")
-            .gte("created_at", prev_month_start_walkin.isoformat())
-            .lt("created_at", month_start_walkin.isoformat())
-            .execute()
-        )
-        prev_walkin_count = int(prev_walkin_resp.count or 0)
-
-        if prev_walkin_count == 0:
-            delta_walkin = "+∞%" if walkin_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("walkin_table")
+                .select("id", count="exact")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_walkin_count = int(prev_q.count or 0)
+            if prev_walkin_count == 0:
+                delta_walkin = "+∞%" if walkin_count > 0 else "0%"
+            else:
+                pct_change_walkin = (walkin_count - prev_walkin_count) / prev_walkin_count * 100.0
+                delta_walkin = f"{pct_change_walkin:+.1f}%"
         else:
-            pct_change_walkin = (walkin_count - prev_walkin_count) / prev_walkin_count * 100.0
-            delta_walkin = f"{pct_change_walkin:+.1f}%"
+            delta_walkin = "—"
 
-        st.metric(label="Walkin Leads (MTD)", value=walkin_count, delta=delta_walkin)
+        st.metric(label="Walkin Leads", value=walkin_count, delta=delta_walkin)
     except Exception as err:
         st.warning(f"Could not load KPI (Walkin Leads): {err}")
 
 with col_kpi_8:
     try:
-        now_ts_walkin_won = pd.Timestamp.now(tz="UTC")
-        month_start_walkin_won = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-        prev_month_start_walkin_won = month_start_walkin_won - pd.offsets.MonthBegin(1)
-
-        walkin_won_resp = (
+        q = (
             supabase
             .table("walkin_table")
             .select("id", count="exact")
             .eq("status", "Won")
-            .gte("created_at", month_start_walkin_won.isoformat())
-            .lte("created_at", now_ts_walkin_won.isoformat())
-            .execute()
         )
-        walkin_won_count = int(walkin_won_resp.count or 0)
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        curr_resp = q.execute()
+        walkin_won_count = int(curr_resp.count or 0)
 
-        prev_walkin_won_resp = (
-            supabase
-            .table("walkin_table")
-            .select("id", count="exact")
-            .eq("status", "Won")
-            .gte("created_at", prev_month_start_walkin_won.isoformat())
-            .lt("created_at", month_start_walkin_won.isoformat())
-            .execute()
-        )
-        prev_walkin_won_count = int(prev_walkin_won_resp.count or 0)
-
-        if prev_walkin_won_count == 0:
-            delta_walkin_won = "+∞%" if walkin_won_count > 0 else "0%"
+        if prev_start_global is not None and prev_end_global is not None:
+            prev_q = (
+                supabase
+                .table("walkin_table")
+                .select("id", count="exact")
+                .eq("status", "Won")
+                .gte("created_at", prev_start_global.isoformat())
+                .lte("created_at", prev_end_global.isoformat())
+                .execute()
+            )
+            prev_walkin_won_count = int(prev_q.count or 0)
+            if prev_walkin_won_count == 0:
+                delta_walkin_won = "+∞%" if walkin_won_count > 0 else "0%"
+            else:
+                pct_change_walkin_won = (walkin_won_count - prev_walkin_won_count) / prev_walkin_won_count * 100.0
+                delta_walkin_won = f"{pct_change_walkin_won:+.1f}%"
         else:
-            pct_change_walkin_won = (walkin_won_count - prev_walkin_won_count) / prev_walkin_won_count * 100.0
-            delta_walkin_won = f"{pct_change_walkin_won:+.1f}%"
+            delta_walkin_won = "—"
 
-        st.metric(label="Walkin Won (MTD)", value=walkin_won_count, delta=delta_walkin_won)
+        st.metric(label="Walkin Won", value=walkin_won_count, delta=delta_walkin_won)
     except Exception as err:
         st.warning(f"Could not load KPI (Walkin Won): {err}")
 
@@ -360,37 +381,9 @@ with tab1:
         st.warning(f"Could not load lead sources: {err}")
         df_leads = pd.DataFrame()
 
-    # Date filter controls for Admin dashboard - compact size
-    col_filter_admin, col_empty_filter_admin = st.columns([0.2, 0.8])
-    with col_filter_admin:
-        filter_option_admin = st.selectbox(
-            "Date filter (based on created_at)", ["MTD", "Today", "Custom Range", "All time"], index=0, key="admin_filter"
-        )
-
-    # Determine start/end datetimes for admin filter (all in UTC)
-    now_ts_admin = pd.Timestamp.now(tz="UTC")
-    today_start_admin = pd.Timestamp(date.today()).tz_localize("UTC")
-    today_end_admin = today_start_admin + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
-    month_start_admin = pd.Timestamp(date.today().replace(day=1)).tz_localize("UTC")
-
-    if filter_option_admin == "Today":
-        start_dt_admin, end_dt_admin = today_start_admin, today_end_admin
-    elif filter_option_admin == "MTD":
-        start_dt_admin, end_dt_admin = month_start_admin, now_ts_admin
-    elif filter_option_admin == "Custom Range":
-        # Custom date inputs also in compact size
-        col_custom_admin, col_empty_custom_admin = st.columns([0.2, 0.8])
-        with col_custom_admin:
-            col_start_admin, col_end_admin = st.columns(2)
-            with col_start_admin:
-                custom_start_admin = st.date_input("Start date", value=date.today().replace(day=1), key="admin_start")
-            with col_end_admin:
-                custom_end_admin = st.date_input("End date", value=date.today(), key="admin_end")
-        # Normalize to full-day range
-        start_dt_admin = pd.Timestamp(custom_start_admin).tz_localize("UTC")
-        end_dt_admin = pd.Timestamp(custom_end_admin).tz_localize("UTC") + pd.Timedelta(days=1) - pd.Timedelta(milliseconds=1)
-    else:
-        start_dt_admin, end_dt_admin = None, None
+    # Use global date filter inside Admin dashboard
+    filter_option_admin = filter_option_global
+    start_dt_admin, end_dt_admin = start_dt_global, end_dt_global
 
     # Apply created_at filter to admin data
     df_leads_filtered = df_leads.copy()
