@@ -27,6 +27,9 @@ st.markdown(
     """
     <style>
       .block-container { max-width: 100% !important; padding-top: 1rem; padding-bottom: 1rem; }
+      h1 { font-size: 34px !important; margin-bottom: 0.5rem !important; }
+      h2 { font-size: 26px !important; margin-bottom: 0.5rem !important; }
+      h3 { font-size: 22px !important; margin-bottom: 0.25rem !important; }
     </style>
     """,
     unsafe_allow_html=True,
@@ -39,7 +42,7 @@ if "_printed_local_url" not in st.session_state:
     print(f"Local URL: http://{host}:{port}")
     st.session_state["_printed_local_url"] = True
 
-st.title("🚶Analytics Dashboard")
+st.title("Analytics Dashboard")
 
 # KPI cards (top): All in one row
 col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6, col_kpi_7, col_kpi_8 = st.columns(8)
@@ -491,8 +494,17 @@ with tab1:
             # Sort by conversion percentage descending, then by count descending, then by source name
             sources_df = sources_df.sort_values(["Conversion %", "Count", "Source"], ascending=[False, False, True])
             
-            # Make Source the index and show it in the table
+            # Make Source the index, append TOTAL row, and show it in the table
             sources_df_display = sources_df.set_index("Source")
+            total_count_src = int(sources_df["Count"].sum())
+            total_won_src = int(sources_df["Won"].sum())
+            total_conv_src = (total_won_src / total_count_src * 100.0) if total_count_src else 0.0
+            total_row_src = pd.DataFrame({
+                "Count": [total_count_src],
+                "Won": [total_won_src],
+                "Conversion %": [round(total_conv_src, 2)],
+            }, index=["TOTAL"])
+            sources_df_display = pd.concat([sources_df_display, total_row_src])
             st.dataframe(sources_df_display, use_container_width=True, hide_index=False)
         else:
             st.info("No lead sources available to display.")
