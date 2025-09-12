@@ -819,27 +819,25 @@ with tab1:
 
         st.dataframe(branches_table_display_admin, use_container_width=True, hide_index=False)
 
-with tab2:
-    st.info("Walkin (branch-wise) has been moved to the Admin tab next to ETBR.")
-
-with tab3:
+    # CRE Performance table moved here under Admin (below charts), keeping same sizing
     st.subheader("CRE Performance")
+    cre_col, _cre_spacer = st.columns([0.5, 0.5])
     try:
         # Fetch CRE data (and created_at for filtering) from lead_master
         cre_res = (
             supabase
             .table("lead_master")
-            .select("cre_name", "created_at", "lead_status", "first_call_date", "final_status")
+            .select("cre_name", "created_at", "lead_status", "first_call_date", "final_status", "tat")
             .execute()
         )
         df_cre = pd.DataFrame(cre_res.data)
 
-        # Apply global date filter if available
+        # Apply Admin/global date filter
         df_cre_filtered = df_cre.copy()
-        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+        if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
             if not df_cre.empty and "created_at" in df_cre.columns:
                 created_ts_cre = pd.to_datetime(df_cre["created_at"], errors="coerce", utc=True)
-                mask_cre = created_ts_cre.between(start_dt_global, end_dt_global)
+                mask_cre = created_ts_cre.between(start_dt_admin, end_dt_admin)
                 df_cre_filtered = df_cre.loc[mask_cre].copy()
 
         # Build table with first column as CRE names and Touched/UT counts
@@ -916,6 +914,12 @@ with tab3:
                 .reset_index(name="Assigned")
             )
 
+            # Compute TAT average per CRE (in seconds) for rows where TAT is present
+            tat_series_raw = pd.to_numeric(df_cre_filtered.get("tat", pd.Series(dtype=float)), errors="coerce")
+            df_tat = pd.DataFrame({"CRE": cre_series, "tat_sec": tat_series_raw})
+            df_tat_valid = df_tat[(df_tat["CRE"] != "Unassigned Leads") & (df_tat["tat_sec"].notna())].copy()
+            tat_avg_map = df_tat_valid.groupby("CRE")["tat_sec"].mean() if not df_tat_valid.empty else pd.Series(dtype=float)
+
             # Final CRE table: all unique CREs with Touched counts (fill missing with 0)
             cre_names = pd.Series(sorted(df_tmp_valid["CRE"].unique())).rename("CRE").to_frame()
             cre_table = (
@@ -931,8 +935,29 @@ with tab3:
             if "Open leads" in cre_table.columns:
                 cre_table["Open leads"] = cre_table["Open leads"].astype(int)
 
+            # Attach TAT averages (seconds)
+            tat_avg_df = tat_avg_map.rename("tat_avg_sec").reset_index() if not tat_avg_map.empty else pd.DataFrame({"CRE": [], "tat_avg_sec": []})
+            cre_table = cre_table.merge(tat_avg_df, on="CRE", how="left")
+            cre_table["tat_avg_sec"] = cre_table["tat_avg_sec"].fillna(0.0)
+
+            # Helper to format seconds to min/hours/days
+            def _format_tat(seconds: float) -> str:
+                try:
+                    s = float(seconds)
+                except Exception:
+                    return "0m"
+                if s <= 0:
+                    return "0m"
+                if s < 3600:
+                    return f"{s/60:.1f}m"
+                if s < 86400:
+                    return f"{s/3600:.1f}h"
+                return f"{s/86400:.1f}d"
+
+            cre_table["TAT(Avg)"] = cre_table["tat_avg_sec"].apply(_format_tat)
+
             # Reorder columns and sort by Assigned descending
-            desired_order_cols = [c for c in ["CRE", "Assigned", "Open leads", "UT", "Touched", "Followup"] if c in cre_table.columns]
+            desired_order_cols = [c for c in ["CRE", "Assigned", "Open leads", "UT", "Touched", "Followup", "TAT(Avg)"] if c in cre_table.columns]
             cre_table = cre_table[desired_order_cols]
             if "Assigned" in cre_table.columns:
                 cre_table = cre_table.sort_values("Assigned", ascending=False)
@@ -941,6 +966,9 @@ with tab3:
             numeric_cols = [c for c in ["Assigned", "Open leads", "UT", "Touched", "Followup"] if c in cre_table.columns]
             total_values = {c: int(cre_table[c].sum()) for c in numeric_cols}
             total_row_dict = {**{"CRE": "TOTAL"}, **total_values}
+            # Compute total-average TAT over all valid rows
+            total_avg_tat_sec = float(df_tat_valid["tat_sec"].mean()) if not df_tat_valid.empty else 0.0
+            total_row_dict["TAT(Avg)"] = _format_tat(total_avg_tat_sec)
 
             # Dynamically size the table so CRE names (index) are fully visible
             try:
@@ -965,22 +993,28 @@ with tab3:
                     lambda row: [highlight_css] * len(row) if str(row.get("CRE", "")) == "TOTAL" else [""] * len(row),
                     axis=1,
                 )
-                st.dataframe(
-                    styled,
-                    use_container_width=False,
-                    width=desired_width,
-                    height=computed_height,
-                    hide_index=True,
-                )
+                with cre_col:
+                    st.dataframe(
+                        styled,
+                        use_container_width=True,
+                        height=computed_height,
+                        hide_index=True,
+                    )
             except Exception:
-                st.dataframe(
-                    df_display,
-                    use_container_width=False,
-                    width=desired_width,
-                    height=computed_height,
-                    hide_index=True,
-                )
+                with cre_col:
+                    st.dataframe(
+                        df_display,
+                        use_container_width=True,
+                        height=computed_height,
+                        hide_index=True,
+                    )
         else:
             st.info("No CRE data available to display.")
     except Exception as err:
         st.warning(f"Could not load CRE Performance data: {err}")
+
+with tab2:
+    st.info("Walkin (branch-wise) has been moved to the Admin tab next to ETBR.")
+
+with tab3:
+    st.info("CRE Performance has been moved to the Admin tab below the Source-wise Lead Count chart.")
