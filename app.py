@@ -542,6 +542,23 @@ with tab1:
                 won_counts_admin = pd.DataFrame({"branch": [], "won": []})
                 lost_counts_admin = pd.DataFrame({"branch": [], "lost": []})
 
+            # Test drive done (TD) counts per branch within filtered data
+            if "test_drive_done" in df_walkin_admin.columns:
+                tdd_series = df_walkin_admin["test_drive_done"]
+                if pd.api.types.is_bool_dtype(tdd_series):
+                    td_mask_admin = tdd_series.fillna(False)
+                else:
+                    td_mask_admin = tdd_series.astype(str).str.strip().str.lower().isin(["true", "yes", "1"])
+                td_counts_admin = (
+                    df_walkin_admin[td_mask_admin]
+                    .groupby("branch")
+                    .size()
+                    .rename_axis("branch")
+                    .reset_index(name="td")
+                )
+            else:
+                td_counts_admin = pd.DataFrame({"branch": [], "td": []})
+
             # Touched/Untouched among pending
             if "first_call_date" in df_walkin_admin.columns and "status" in df_walkin_admin.columns:
                 status_pending_mask_admin = df_walkin_admin["status"].astype(str).str.strip().str.lower() == "pending"
@@ -566,17 +583,19 @@ with tab1:
             branches_table_admin = branches_table_admin.merge(untouched_counts_admin, on="branch", how="left").fillna({"untouched": 0})
             branches_table_admin = branches_table_admin.merge(won_counts_admin, on="branch", how="left").fillna({"won": 0})
             branches_table_admin = branches_table_admin.merge(lost_counts_admin, on="branch", how="left").fillna({"lost": 0})
+            branches_table_admin = branches_table_admin.merge(td_counts_admin, on="branch", how="left").fillna({"td": 0})
             branches_table_admin["rows"] = branches_table_admin["rows"].astype(int)
             branches_table_admin["pending"] = branches_table_admin["pending"].astype(int)
             branches_table_admin["touched"] = branches_table_admin["touched"].astype(int)
             branches_table_admin["untouched"] = branches_table_admin["untouched"].astype(int)
             branches_table_admin["won"] = branches_table_admin["won"].astype(int)
             branches_table_admin["lost"] = branches_table_admin["lost"].astype(int)
+            branches_table_admin["td"] = branches_table_admin["td"].astype(int)
         else:
-            branches_table_admin = pd.DataFrame({"branch": [], "rows": [], "pending": [], "touched": [], "untouched": [], "won": [], "lost": []})
+            branches_table_admin = pd.DataFrame({"branch": [], "rows": [], "pending": [], "touched": [], "untouched": [], "won": [], "lost": [], "td": []})
 
         # Finalize display columns and conversion
-        desired_order_admin = ["branch", "rows", "pending", "touched", "untouched", "won", "lost"]
+        desired_order_admin = ["branch", "rows", "pending", "touched", "untouched", "won", "lost", "td"]
         columns_in_order_admin = [col for col in desired_order_admin if col in branches_table_admin.columns]
         branches_table_admin = branches_table_admin[columns_in_order_admin]
 
@@ -588,6 +607,7 @@ with tab1:
                 "untouched": "Untouched",
                 "won": "Won",
                 "lost": "Lost",
+                "td": "TD",
             }
         )
 
@@ -596,11 +616,11 @@ with tab1:
                 lambda row: (row["Won"] / row["Punched"] * 100.0) if row["Punched"] else 0.0,
                 axis=1
             )
-            branches_table_display_admin["Conversion (%)"] = safe_div_admin.round(2)
+            branches_table_display_admin["%"] = safe_div_admin.round(2)
 
-            numeric_cols_admin = [c for c in ["Punched", "Pending", "Touched", "Untouched", "Won", "Lost"] if c in branches_table_display_admin.columns]
+            numeric_cols_admin = [c for c in ["Punched", "Pending", "Touched", "Untouched", "Won", "Lost", "TD"] if c in branches_table_display_admin.columns]
             total_row_admin = branches_table_display_admin[numeric_cols_admin].sum()
-            total_row_admin["Conversion (%)"] = (total_row_admin["Won"] / total_row_admin["Punched"] * 100.0) if total_row_admin["Punched"] else 0.0
+            total_row_admin["%"] = (total_row_admin["Won"] / total_row_admin["Punched"] * 100.0) if total_row_admin["Punched"] else 0.0
             total_row_admin = total_row_admin.round(2)
             total_row_admin.name = "TOTAL"
             branches_table_display_admin = pd.concat([branches_table_display_admin, total_row_admin.to_frame().T])
