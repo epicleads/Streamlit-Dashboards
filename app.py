@@ -489,10 +489,10 @@ with tab1:
                 st.warning(f"Could not append Walkin row: {err}")
 
             # Calculate conversion percentage (Won/Count * 100)
-            sources_df["Conversion %"] = (sources_df["Won"] / sources_df["Count"] * 100).round(2)
+            sources_df["%"] = (sources_df["Won"] / sources_df["Count"] * 100).round(2)
             
             # Sort by conversion percentage descending, then by count descending, then by source name
-            sources_df = sources_df.sort_values(["Conversion %", "Count", "Source"], ascending=[False, False, True])
+            sources_df = sources_df.sort_values(["%", "Count", "Source"], ascending=[False, False, True])
             
             # Make Source the index, append TOTAL row, and show it in the table
             sources_df_display = sources_df.set_index("Source")
@@ -502,7 +502,7 @@ with tab1:
             total_row_src = pd.DataFrame({
                 "Count": [total_count_src],
                 "Won": [total_won_src],
-                "Conversion %": [round(total_conv_src, 2)],
+                "%": [round(total_conv_src, 2)],
             }, index=["TOTAL"])
             sources_df_display = pd.concat([sources_df_display, total_row_src])
             st.dataframe(sources_df_display, use_container_width=True, hide_index=False)
