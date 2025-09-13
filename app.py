@@ -230,7 +230,49 @@ with col_kpi_3:
         else:
             delta3 = "—"
 
-        st.metric(label="Assigned to PS", value=ps_count, delta=delta3)
+        # Compute total leads for percentage
+        q_total_leads_ps = supabase.table("lead_master").select("id", count="exact")
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q_total_leads_ps = q_total_leads_ps.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        total_leads_resp_ps = q_total_leads_ps.execute()
+        total_leads_count_ps = int(total_leads_resp_ps.count or 0)
+        ps_assigned_pct = (ps_count / total_leads_count_ps * 100.0) if total_leads_count_ps else 0.0
+        pct_text_ps = f"{ps_assigned_pct:.2f}%"
+
+        # Render custom metric card similar to Won/Walkin Won
+        delta_text_ps = str(delta3)
+        if delta_text_ps.startswith("+"):
+            delta_class_ps = "up"
+            arrow_ps = "▲"
+        elif delta_text_ps.startswith("-"):
+            delta_class_ps = "down"
+            arrow_ps = "▼"
+        else:
+            delta_class_ps = "neutral"
+            arrow_ps = "—"
+
+        custom_html_ps = f"""
+        <div class=\"won-metric-card\">
+            <div class=\"label\">Assigned to PS</div>
+            <div class=\"value-row\">
+                <span class=\"big\">{ps_count}</span>
+                <span class=\"small\">{pct_text_ps}</span>
+            </div>
+            <div class=\"delta {delta_class_ps}\">{arrow_ps}&nbsp;{delta_text_ps}</div>
+        </div>
+        <style>
+        .won-metric-card {{ display:inline-flex; flex-direction:column; gap:6px; }}
+        .won-metric-card .label {{ font-size:14px; opacity:0.85; }}
+        .won-metric-card .value-row {{ display:flex; align-items:baseline; gap:8px; }}
+        .won-metric-card .value-row .big {{ font-size:32px; font-weight:700; line-height:1; }}
+        .won-metric-card .value-row .small {{ font-size:13px; font-weight:600; color:#16a34a; line-height:1; }}
+        .won-metric-card .delta {{ width:max-content; font-size:13px; padding:4px 10px; border-radius:999px; }}
+        .won-metric-card .delta.up {{ background:rgba(34,197,94,0.15); color:#16a34a; }}
+        .won-metric-card .delta.down {{ background:rgba(239,68,68,0.15); color:#ef4444; }}
+        .won-metric-card .delta.neutral {{ background:rgba(156,163,175,0.15); color:#9aa0a6; }}
+        </style>
+        """
+        st.markdown(custom_html_ps, unsafe_allow_html=True)
     except Exception as err:
         st.warning(f"Could not load KPI (Assigned to PS): {err}")
 
@@ -302,7 +344,49 @@ with col_kpi_5:
         else:
             delta_lost = "—"
 
-        st.metric(label="Lost Leads", value=lost_count, delta=delta_lost)
+        # Compute total leads for percentage
+        q_total_leads_for_lost = supabase.table("lead_master").select("id", count="exact")
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+            q_total_leads_for_lost = q_total_leads_for_lost.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+        total_leads_resp_for_lost = q_total_leads_for_lost.execute()
+        total_leads_count_for_lost = int(total_leads_resp_for_lost.count or 0)
+        lost_pct = (lost_count / total_leads_count_for_lost * 100.0) if total_leads_count_for_lost else 0.0
+        pct_text_lost = f"{lost_pct:.2f}%"
+
+        # Render custom metric card similar to Won/Walkin Won
+        delta_text_lost = str(delta_lost)
+        if delta_text_lost.startswith("+"):
+            delta_class_lost = "up"
+            arrow_lost = "▲"
+        elif delta_text_lost.startswith("-"):
+            delta_class_lost = "down"
+            arrow_lost = "▼"
+        else:
+            delta_class_lost = "neutral"
+            arrow_lost = "—"
+
+        custom_html_lost = f"""
+        <div class=\"lost-metric-card\">
+            <div class=\"label\">Lost Leads</div>
+            <div class=\"value-row\">
+                <span class=\"big\">{lost_count}</span>
+                <span class=\"small\">{pct_text_lost}</span>
+            </div>
+            <div class=\"delta {delta_class_lost}\">{arrow_lost}&nbsp;{delta_text_lost}</div>
+        </div>
+        <style>
+        .lost-metric-card {{ display:inline-flex; flex-direction:column; gap:6px; }}
+        .lost-metric-card .label {{ font-size:14px; opacity:0.85; }}
+        .lost-metric-card .value-row {{ display:flex; align-items:baseline; gap:8px; }}
+        .lost-metric-card .value-row .big {{ font-size:32px; font-weight:700; line-height:1; }}
+        .lost-metric-card .value-row .small {{ font-size:13px; font-weight:600; color:#ef4444; line-height:1; }}
+        .lost-metric-card .delta {{ width:max-content; font-size:13px; padding:4px 10px; border-radius:999px; }}
+        .lost-metric-card .delta.up {{ background:rgba(34,197,94,0.15); color:#16a34a; }}
+        .lost-metric-card .delta.down {{ background:rgba(239,68,68,0.15); color:#ef4444; }}
+        .lost-metric-card .delta.neutral {{ background:rgba(156,163,175,0.15); color:#9aa0a6; }}
+        </style>
+        """
+        st.markdown(custom_html_lost, unsafe_allow_html=True)
     except Exception as err:
         st.warning(f"Could not load KPI (Lost Leads): {err}")
 
@@ -977,7 +1061,7 @@ with tab3:
                 cre_norm_for_ql[ps_exists_mask]
                 .value_counts()
                 .rename_axis("CRE")
-                .reset_index(name="QL")
+                .reset_index(name="Quality Leads")
             )
 
             df_status = pd.DataFrame({
@@ -1012,8 +1096,8 @@ with tab3:
                 cre_table["Untouched"] = cre_table["Untouched"].astype(int)
             cre_table["Followup"] = cre_table["Followup"].astype(int)
             cre_table["Assigned"] = cre_table["Assigned"].astype(int)
-            if "QL" in cre_table.columns:
-                cre_table["QL"] = cre_table["QL"].fillna(0).astype(int)
+            if "Quality Leads" in cre_table.columns:
+                cre_table["Quality Leads"] = cre_table["Quality Leads"].fillna(0).astype(int)
             if "Open leads" in cre_table.columns:
                 cre_table["Open leads"] = cre_table["Open leads"].astype(int)
             if "Retailed" in cre_table.columns:
@@ -1040,7 +1124,7 @@ with tab3:
 
             cre_table["TAT(Avg)"] = cre_table["tat_avg_sec"].apply(_format_tat)
 
-            desired_order_cols = [c for c in ["CRE", "Assigned", "QL", "Untouched", "Open leads", "Retailed", "Lost", "TAT(Avg)"] if c in cre_table.columns]
+            desired_order_cols = [c for c in ["CRE", "Assigned", "Quality Leads", "Untouched", "Open leads", "Retailed", "Lost", "TAT(Avg)"] if c in cre_table.columns]
             cre_table = cre_table[desired_order_cols]
             if "Assigned" in cre_table.columns:
                 cre_table = cre_table.sort_values("Assigned", ascending=False)
@@ -1048,9 +1132,9 @@ with tab3:
             numeric_cols = [c for c in ["Assigned", "Open leads", "Retailed", "Untouched", "Lost"] if c in cre_table.columns]
             total_values = {c: int(cre_table[c].sum()) for c in numeric_cols}
             total_row_dict = {**{"CRE": "TOTAL"}, **total_values}
-            # Include QL in totals if present
-            if "QL" in cre_table.columns:
-                total_row_dict["QL"] = int(cre_table["QL"].sum())
+            # Include Quality Leads in totals if present
+            if "Quality Leads" in cre_table.columns:
+                total_row_dict["Quality Leads"] = int(cre_table["Quality Leads"].sum())
             total_avg_tat_sec = float(df_tat_valid["tat_sec"].mean()) if not df_tat_valid.empty else 0.0
             total_row_dict["TAT(Avg)"] = _format_tat(total_avg_tat_sec)
 
