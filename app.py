@@ -903,6 +903,218 @@ with tab1:
 
         st.dataframe(branches_table_display_admin, use_container_width=True, hide_index=False)
 
+    # Additional table: Unique branches from lead_master with global date filter (50% width)
+    dl_left, _dl_right = st.columns([0.75, 0.25])
+    with dl_left:
+        st.subheader("Digital Leads Summary (branch-wise)")
+        try:
+            lm_res = (
+                supabase
+                .table("lead_master")
+                .select("branch", "created_at", "ps_name", "source", "final_status")
+                .execute()
+            )
+            df_lm = pd.DataFrame(lm_res.data)
+
+            # Apply global/Overall date filter on created_at
+            df_lm_filtered = df_lm.copy()
+            if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
+                if not df_lm.empty and "created_at" in df_lm.columns:
+                    created_ts_lm = pd.to_datetime(df_lm["created_at"], errors="coerce", utc=True)
+                    mask_lm = created_ts_lm.between(start_dt_admin, end_dt_admin)
+                    df_lm_filtered = df_lm.loc[mask_lm].copy()
+
+            # Build table with unique branch values and Leads Assigned count (ps_name not null)
+            if not df_lm_filtered.empty and "branch" in df_lm_filtered.columns:
+                branch_clean = df_lm_filtered["branch"].fillna("").astype(str).str.strip().replace("", "Unknown")
+                branches_unique_df = (
+                    pd.Series(sorted(branch_clean.unique()))
+                    .rename("Branch")
+                    .to_frame()
+                )
+
+                # Count rows per branch where ps_name exists (not null/empty)
+                if "ps_name" in df_lm_filtered.columns:
+                    ps_exists = df_lm_filtered["ps_name"].notna() & (df_lm_filtered["ps_name"].astype(str).str.strip() != "")
+                    assigned_counts = (
+                        branch_clean[ps_exists]
+                        .value_counts()
+                        .rename_axis("Branch")
+                        .reset_index(name="Leads Assigned")
+                    )
+                    branches_unique_df = (
+                        branches_unique_df
+                        .merge(assigned_counts, on="Branch", how="left")
+                        .fillna({"Leads Assigned": 0})
+                    )
+                    branches_unique_df["Leads Assigned"] = branches_unique_df["Leads Assigned"].astype(int)
+
+                    # Dynamic source columns (Assigned): ps_name exists AND source == value (per branch)
+                    if "source" in df_lm_filtered.columns:
+                        source_clean_upper_assigned = df_lm_filtered["source"].fillna("").astype(str).str.strip().str.upper()
+                        unique_sources_assigned = sorted(source_clean_upper_assigned[source_clean_upper_assigned != ""].unique().tolist())
+                        for src in unique_sources_assigned:
+                            src_mask_assigned = source_clean_upper_assigned == src
+                            src_counts_assigned = (
+                                branch_clean[ps_exists & src_mask_assigned]
+                                .value_counts()
+                                .rename_axis("Branch")
+                                .reset_index(name=src)
+                            )
+                            branches_unique_df = (
+                                branches_unique_df
+                                .merge(src_counts_assigned, on="Branch", how="left")
+                                .fillna({src: 0})
+                            )
+                            branches_unique_df[src] = branches_unique_df[src].astype(int)
+
+                # Dynamic source columns: for each unique source value, count rows where
+                # source == that value AND final_status == "Won" (per branch)
+                if "source" in df_lm_filtered.columns:
+                    source_clean_upper = df_lm_filtered["source"].fillna("").astype(str).str.strip().str.upper()
+                    final_status_clean = df_lm_filtered.get("final_status", pd.Series(dtype=object)).fillna("").astype(str).str.strip().str.lower()
+                    unique_sources = sorted(source_clean_upper[source_clean_upper != ""].unique().tolist())
+                    for src in unique_sources:
+                        src_mask = source_clean_upper == src
+                        retailed_mask = src_mask & (final_status_clean == "won")
+                        src_counts = (
+                            branch_clean[retailed_mask]
+                            .value_counts()
+                            .rename_axis("Branch")
+                            .reset_index(name=f"{src}(R)")
+                        )
+                        branches_unique_df = (
+                            branches_unique_df
+                            .merge(src_counts, on="Branch", how="left")
+                            .fillna({f"{src}(R)": 0})
+                        )
+                        branches_unique_df[f"{src}(R)"] = branches_unique_df[f"{src}(R)"].astype(int)
+
+                # Create percentage columns per source: {SRC}(%) = {SRC}(R) / {SRC} * 100
+                try:
+                    src_list_for_pct = (
+                        df_lm_filtered["source"].fillna("").astype(str).str.strip().str.upper()
+                    )
+                    src_list_for_pct = sorted([s for s in src_list_for_pct.unique().tolist() if s != ""])
+                    for src in src_list_for_pct:
+                        base_col = src
+                        retailed_col = f"{src}(R)"
+                        pct_col = f"{src}(%)"
+                        if base_col in branches_unique_df.columns and retailed_col in branches_unique_df.columns:
+                            branches_unique_df[pct_col] = branches_unique_df.apply(
+                                lambda r: (r[retailed_col] / r[base_col] * 100.0) if r[base_col] else 0.0,
+                                axis=1,
+                            )
+                            branches_unique_df[pct_col] = branches_unique_df[pct_col].round(2)
+                except Exception:
+                    pass
+
+                # Reorder columns so each source is followed by its (R) and (%) columns,
+                # and sort source groups by total base counts descending
+                try:
+                    src_candidates_series = (
+                        df_lm_filtered["source"].fillna("").astype(str).str.strip().str.upper()
+                    )
+                    src_candidates = [s for s in src_candidates_series.unique().tolist() if s != ""]
+                    # Sort by total counts in base columns (descending)
+                    reorder_sources = sorted(
+                        src_candidates,
+                        key=lambda s: (int(branches_unique_df[s].sum()) if s in branches_unique_df.columns else 0),
+                        reverse=True,
+                    )
+                    ordered_cols = []
+                    if "Leads Assigned" in branches_unique_df.columns:
+                        ordered_cols.append("Leads Assigned")
+                    for src in reorder_sources:
+                        if src in branches_unique_df.columns:
+                            ordered_cols.append(src)
+                        retailed_col = f"{src}(R)"
+                        if retailed_col in branches_unique_df.columns:
+                            ordered_cols.append(retailed_col)
+                        pct_col = f"{src}(%)"
+                        if pct_col in branches_unique_df.columns:
+                            ordered_cols.append(pct_col)
+                    other_cols = [c for c in branches_unique_df.columns if c not in (["Branch"] + ordered_cols)]
+                    branches_unique_df = branches_unique_df[["Branch"] + ordered_cols + other_cols]
+                except Exception:
+                    pass
+
+                # Append TOTAL row summing numeric columns
+                count_cols_lb = [
+                    c for c in branches_unique_df.columns
+                    if c != "Branch" and not c.endswith("(%") and not c.endswith("(%)")
+                ]
+                if count_cols_lb:
+                    totals_map_lb = {c: int(branches_unique_df[c].sum()) for c in count_cols_lb}
+                    total_row_lb = pd.DataFrame([{**{"Branch": "TOTAL"}, **totals_map_lb}])
+                    branches_unique_df = pd.concat([branches_unique_df, total_row_lb], ignore_index=True)
+                    # Compute TOTAL row percentages after counts are summed
+                    try:
+                        for src in reorder_sources:
+                            base_col = src
+                            retailed_col = f"{src}(R)"
+                            pct_col = f"{src}(%)"
+                            if base_col in branches_unique_df.columns and retailed_col in branches_unique_df.columns:
+                                base_total = branches_unique_df.loc[branches_unique_df["Branch"] == "TOTAL", base_col].values
+                                retailed_total = branches_unique_df.loc[branches_unique_df["Branch"] == "TOTAL", retailed_col].values
+                                if len(base_total) and len(retailed_total):
+                                    pct_val = (float(retailed_total[0]) / float(base_total[0]) * 100.0) if float(base_total[0]) else 0.0
+                                    branches_unique_df.loc[branches_unique_df["Branch"] == "TOTAL", pct_col] = round(pct_val, 2)
+                    except Exception:
+                        pass
+
+                display_lb = branches_unique_df.set_index("Branch")
+                # Style: faintly color groups of columns per source (SRC, SRC(R), SRC(%))
+                try:
+                    source_names_for_style = (
+                        df_lm_filtered["source"].fillna("").astype(str).str.strip().str.upper()
+                    )
+                    source_names_for_style = [s for s in sorted(source_names_for_style.unique().tolist()) if s != ""]
+                    palette = [
+                        "rgba(65,157,120,0.08)",   # green
+                        "rgba(59,130,246,0.08)",   # blue
+                        "rgba(234,179,8,0.10)",    # amber
+                        "rgba(251,146,60,0.10)",   # orange
+                        "rgba(168,85,247,0.08)",   # purple
+                        "rgba(244,114,182,0.10)",  # pink
+                        "rgba(107,114,128,0.08)",  # gray
+                    ]
+                    col_to_color = {}
+                    for idx, src in enumerate(source_names_for_style):
+                        group_cols = [src, f"{src}(R)", f"{src}(%)"]
+                        existing_cols = [c for c in group_cols if c in display_lb.columns]
+                        if existing_cols:
+                            color = palette[idx % len(palette)]
+                            for c in existing_cols:
+                                col_to_color[c] = color
+
+                    def _highlight_column(col_series):
+                        color = col_to_color.get(col_series.name, "")
+                        if color:
+                            return [f"background-color: {color}"] * len(col_series)
+                        return [""] * len(col_series)
+
+                    styled_dl = display_lb.style.apply(_highlight_column, axis=0)
+                    # Ensure percentage columns display with 2 decimals when styled
+                    pct_cols = [c for c in display_lb.columns if c.endswith("(%)")]
+                    if pct_cols:
+                        styled_dl = styled_dl.format({c: "{:.2f}" for c in pct_cols})
+                    st.dataframe(styled_dl, use_container_width=True, hide_index=False)
+                except Exception:
+                    st.dataframe(display_lb, use_container_width=True, hide_index=False)
+
+                # Right column: Branch-only table
+                with _dl_right:
+                    st.subheader("Branches")
+                    try:
+                        st.dataframe(branches_unique_df[["Branch"]], use_container_width=True, hide_index=True)
+                    except Exception:
+                        st.dataframe(pd.DataFrame({"Branch": []}), use_container_width=True, hide_index=True)
+            else:
+                st.info("No branch data available for the selected range.")
+        except Exception as err:
+            st.warning(f"Could not load branches from lead_master: {err}")
+
     # (PS Performance moved to the PS Performance tab)
 
 with tab2:
@@ -1152,11 +1364,11 @@ with tab3:
             header_px = 38
             padding_px = 12
             computed_height = header_px + row_px * total_rows + padding_px
-            df_display = cre_table_with_total.copy()
+            df_display = cre_table_with_total.set_index("CRE")
             try:
                 highlight_css = "background-color: #419D78; color: #ffffff; font-weight: 600;"
                 styled = df_display.style.apply(
-                    lambda row: [highlight_css] * len(row) if str(row.get("CRE", "")) == "TOTAL" else [""] * len(row),
+                    lambda row: [highlight_css] * len(row) if str(row.name) == "TOTAL" else [""] * len(row),
                     axis=1,
                 )
                 with cre_tab_left:
@@ -1164,7 +1376,7 @@ with tab3:
                         styled,
                         use_container_width=True,
                         height=computed_height,
-                        hide_index=True,
+                        hide_index=False,
                     )
             except Exception:
                 with cre_tab_left:
@@ -1172,7 +1384,7 @@ with tab3:
                         df_display,
                         use_container_width=True,
                         height=computed_height,
-                        hide_index=True,
+                        hide_index=False,
                     )
         else:
             st.info("No CRE data available to display.")
