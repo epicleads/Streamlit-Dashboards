@@ -493,7 +493,7 @@ with col_kpi_8:
         st.warning(f"Could not load KPI (Walkin Won): {err}")
 
 # Horizontal navigation tabs for different dashboard sections
-tab1, tab2, tab3 = st.tabs(["🔧 Admin", "📊 PS Performance", "👥 CRE Performance"])
+tab1, tab2, tab3 = st.tabs(["Overall", "Branch Performance", "👥 CRE Performance"])
 
 with tab1:
     # Fetch lead sources data with final_status and created_at
@@ -819,70 +819,122 @@ with tab1:
 
         st.dataframe(branches_table_display_admin, use_container_width=True, hide_index=False)
 
-    # CRE Performance table moved here under Admin (below charts), keeping same sizing
-    st.subheader("CRE Performance")
-    cre_col, ps_col = st.columns([0.5, 0.5])
+    # (PS Performance moved to the PS Performance tab)
+
+with tab2:
+    # PS Performance (standalone tab), date filter based on ps_assigned_at
     try:
-        # Fetch CRE data (and created_at for filtering) from lead_master
+        ps_res = (
+            supabase
+            .table("ps_followup_master")
+            .select("ps_name", "ps_branch", "ps_assigned_at")
+            .execute()
+        )
+        df_ps = pd.DataFrame(ps_res.data)
+
+        # Use global date filter values; apply on ps_assigned_at
+        filter_option_ps = filter_option_global
+        start_dt_ps, end_dt_ps = start_dt_global, end_dt_global
+
+        df_ps_filtered = df_ps.copy()
+        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+            if not df_ps.empty and "ps_assigned_at" in df_ps.columns:
+                ps_assigned_ts = pd.to_datetime(df_ps["ps_assigned_at"], errors="coerce", utc=True)
+                mask_ps = ps_assigned_ts.between(start_dt_ps, end_dt_ps)
+                df_ps_filtered = df_ps.loc[mask_ps].copy()
+
+        # Branch filter dropdown (from filtered data) in header
+        if not df_ps_filtered.empty and "ps_branch" in df_ps_filtered.columns:
+            branches = (
+                pd.Series(sorted(df_ps_filtered["ps_branch"].fillna("").astype(str).str.strip().replace("", "Unknown").unique()))
+                .tolist()
+            )
+        else:
+            branches = []
+
+        branch_options = ["All"] + branches if branches else ["All"]
+        ps_left_col, _ps_right_col = st.columns([0.5, 0.5])
+        with ps_left_col:
+            title_col, filter_col = st.columns([0.5, 0.5])
+            with title_col:
+                st.subheader("PS Performance")
+            with filter_col:
+                selected_branch = st.selectbox("Branch", options=branch_options, index=0, key="ps_branch_filter", label_visibility="collapsed")
+
+        # Apply branch selection
+        df_ps_branch = df_ps_filtered.copy()
+        if selected_branch != "All":
+            df_ps_branch = df_ps_branch[df_ps_branch["ps_branch"].fillna("").astype(str).str.strip().replace("", "Unknown") == selected_branch]
+
+        # Build PS table: PS and Assigned counts
+        if not df_ps_branch.empty and "ps_name" in df_ps_branch.columns:
+            ps_series = df_ps_branch["ps_name"].fillna("").astype(str).str.strip().replace("", "Unassigned PS")
+            assigned_df = (
+                ps_series.value_counts().rename_axis("PS").reset_index(name="Assigned")
+            )
+            assigned_df = assigned_df.sort_values(["Assigned", "PS"], ascending=[False, True])
+
+            total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
+            total_row_ps = pd.DataFrame({"PS": ["TOTAL"], "Assigned": [total_assigned]})
+            assigned_df_display = pd.concat([assigned_df, total_row_ps], ignore_index=True)
+
+            total_rows_ps = int(len(assigned_df_display)) + 1
+            row_px_ps = 34
+            header_px_ps = 38
+            padding_px_ps = 12
+            height_ps = header_px_ps + row_px_ps * total_rows_ps + padding_px_ps
+            with ps_left_col:
+                st.dataframe(assigned_df_display, use_container_width=True, height=height_ps, hide_index=True)
+        else:
+            st.info("No PS records available for the selected range/branch.")
+    except Exception as err:
+        st.warning(f"Could not load PS Performance data: {err}")
+
+with tab3:
+    st.subheader("CRE Performance")
+    cre_tab_left, _cre_tab_right = st.columns([0.5, 0.5])
+    try:
         cre_res = (
             supabase
             .table("lead_master")
-            .select("cre_name", "created_at", "lead_status", "first_call_date", "final_status", "tat")
+            .select("cre_name", "created_at", "lead_status", "first_call_date", "final_status", "tat", "ps_name")
             .execute()
         )
         df_cre = pd.DataFrame(cre_res.data)
 
-        # Apply Admin/global date filter
+        # Apply global date filter (same as KPIs)
         df_cre_filtered = df_cre.copy()
-        if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
+        if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
             if not df_cre.empty and "created_at" in df_cre.columns:
                 created_ts_cre = pd.to_datetime(df_cre["created_at"], errors="coerce", utc=True)
-                mask_cre = created_ts_cre.between(start_dt_admin, end_dt_admin)
+                mask_cre = created_ts_cre.between(start_dt_global, end_dt_global)
                 df_cre_filtered = df_cre.loc[mask_cre].copy()
 
-        # Build table with first column as CRE names and Touched/UT counts
         if not df_cre_filtered.empty and "cre_name" in df_cre_filtered.columns:
-            # Normalize CRE names
             cre_series = (
                 df_cre_filtered["cre_name"].fillna("").astype(str).str.strip().replace("", "Unassigned Leads")
             )
-
-            # Derive Touched mask per provided criteria
             lead_status_series = df_cre_filtered.get("lead_status", pd.Series(dtype=object)).fillna("").astype(str).str.strip().str.lower()
             final_status_series = df_cre_filtered.get("final_status", pd.Series(dtype=object)).fillna("").astype(str).str.strip().str.lower()
             first_call_clean = df_cre_filtered.get("first_call_date", pd.Series(dtype=object)).fillna("").astype(str).str.strip()
             final_status_is_null = df_cre_filtered["final_status"].isna() if "final_status" in df_cre_filtered.columns else pd.Series(False, index=df_cre_filtered.index)
 
-            touched_statuses = {
-                "rnr",
-                "busy on another call",
-                "call disconnected",
-                "call not connected",
-            }
-
+            touched_statuses = {"rnr", "busy on another call", "call disconnected", "call not connected"}
             touched_mask = (
                 lead_status_series.isin(touched_statuses)
                 & (first_call_clean == "")
                 & (final_status_series == "pending")
             )
-
-            # Derive UT mask per provided SQL:
-            # first_call_date is null/empty AND lead_status == 'Pending' AND (final_status == 'Pending' OR final_status is null)
             ut_mask = (
                 (first_call_clean == "")
                 & (lead_status_series == "pending")
                 & ((final_status_series == "pending") | (final_status_is_null))
             )
-
-            # Derive Followup mask per provided SQL:
-            # first_call_date is null/empty AND lead_status == 'Call me Back' AND (final_status == 'Pending' OR final_status is null)
             followup_mask = (
                 (first_call_clean == "")
                 & (lead_status_series == "call me back")
                 & ((final_status_series == "pending") | (final_status_is_null))
             )
-
-            # Open leads: final_status == 'Pending' AND first_call_date is NOT NULL/empty
             open_mask = (
                 (first_call_clean != "")
                 & (final_status_series == "pending")
@@ -895,7 +947,6 @@ with tab1:
                 "followup_flag": followup_mask.astype(int),
                 "open_flag": open_mask.astype(int),
             })
-            # Exclude Unassigned Leads from table and totals
             df_tmp_valid = df_tmp[df_tmp["CRE"] != "Unassigned Leads"].copy()
             agg_counts = (
                 df_tmp_valid
@@ -903,10 +954,8 @@ with tab1:
                 .sum()
                 .astype(int)
                 .reset_index()
-                .rename(columns={"touched_flag": "Touched", "ut_flag": "UT", "followup_flag": "Followup", "open_flag": "Open leads"})
+                .rename(columns={"touched_flag": "Touched", "ut_flag": "Untouched", "followup_flag": "Followup", "open_flag": "Open leads"})
             )
-
-            # Total leads assigned per CRE (row count per CRE)
             assigned_counts = (
                 df_tmp_valid
                 .groupby("CRE")
@@ -914,54 +963,68 @@ with tab1:
                 .reset_index(name="Assigned")
             )
 
-            # Won / Lost counts per CRE from final_status
+            # QL: count of rows where ps_name exists for each CRE (within filtered range)
+            # Build a mask aligned with df_cre_filtered index for rows where ps_name exists
+            if "ps_name" in df_cre_filtered.columns:
+                ps_series_raw = df_cre_filtered["ps_name"]
+            else:
+                ps_series_raw = pd.Series([""] * len(df_cre_filtered), index=df_cre_filtered.index)
+            ps_exists_mask = ps_series_raw.notna() & (ps_series_raw.astype(str).str.strip() != "")
+            cre_norm_for_ql = (
+                df_cre_filtered["cre_name"].fillna("").astype(str).str.strip().replace("", "Unassigned Leads")
+            )
+            ql_counts = (
+                cre_norm_for_ql[ps_exists_mask]
+                .value_counts()
+                .rename_axis("CRE")
+                .reset_index(name="QL")
+            )
+
             df_status = pd.DataFrame({
                 "CRE": cre_series,
                 "final_status_clean": final_status_series,
             })
             df_status_valid = df_status[df_status["CRE"] != "Unassigned Leads"].copy()
             won_counts_status = (
-                df_status_valid[df_status_valid["final_status_clean"] == "won"]
-                .groupby("CRE").size().reset_index(name="Won")
+                df_status_valid[df_status_valid["final_status_clean"] == "won"].groupby("CRE").size().reset_index(name="Retailed")
             )
             lost_counts_status = (
-                df_status_valid[df_status_valid["final_status_clean"] == "lost"]
-                .groupby("CRE").size().reset_index(name="Lost")
+                df_status_valid[df_status_valid["final_status_clean"] == "lost"].groupby("CRE").size().reset_index(name="Lost")
             )
 
-            # Compute TAT average per CRE (in seconds) for rows where TAT is present
             tat_series_raw = pd.to_numeric(df_cre_filtered.get("tat", pd.Series(dtype=float)), errors="coerce")
             df_tat = pd.DataFrame({"CRE": cre_series, "tat_sec": tat_series_raw})
             df_tat_valid = df_tat[(df_tat["CRE"] != "Unassigned Leads") & (df_tat["tat_sec"].notna())].copy()
             tat_avg_map = df_tat_valid.groupby("CRE")["tat_sec"].mean() if not df_tat_valid.empty else pd.Series(dtype=float)
 
-            # Final CRE table: all unique CREs with Touched counts (fill missing with 0)
             cre_names = pd.Series(sorted(df_tmp_valid["CRE"].unique())).rename("CRE").to_frame()
             cre_table = (
                 cre_names
                 .merge(agg_counts, on="CRE", how="left")
                 .merge(assigned_counts, on="CRE", how="left")
+                .merge(ql_counts, on="CRE", how="left")
                 .merge(won_counts_status, on="CRE", how="left")
                 .merge(lost_counts_status, on="CRE", how="left")
                 .fillna({"Touched": 0, "UT": 0, "Followup": 0, "Open leads": 0, "Assigned": 0})
             )
             cre_table["Touched"] = cre_table["Touched"].astype(int)
-            cre_table["UT"] = cre_table["UT"].astype(int)
+            if "Untouched" in cre_table.columns:
+                cre_table["Untouched"] = cre_table["Untouched"].astype(int)
             cre_table["Followup"] = cre_table["Followup"].astype(int)
             cre_table["Assigned"] = cre_table["Assigned"].astype(int)
+            if "QL" in cre_table.columns:
+                cre_table["QL"] = cre_table["QL"].fillna(0).astype(int)
             if "Open leads" in cre_table.columns:
                 cre_table["Open leads"] = cre_table["Open leads"].astype(int)
-            if "Won" in cre_table.columns:
-                cre_table["Won"] = cre_table["Won"].fillna(0).astype(int)
+            if "Retailed" in cre_table.columns:
+                cre_table["Retailed"] = cre_table["Retailed"].fillna(0).astype(int)
             if "Lost" in cre_table.columns:
                 cre_table["Lost"] = cre_table["Lost"].fillna(0).astype(int)
 
-            # Attach TAT averages (seconds)
             tat_avg_df = tat_avg_map.rename("tat_avg_sec").reset_index() if not tat_avg_map.empty else pd.DataFrame({"CRE": [], "tat_avg_sec": []})
             cre_table = cre_table.merge(tat_avg_df, on="CRE", how="left")
             cre_table["tat_avg_sec"] = cre_table["tat_avg_sec"].fillna(0.0)
 
-            # Helper to format seconds to min/hours/days
             def _format_tat(seconds: float) -> str:
                 try:
                     s = float(seconds)
@@ -977,30 +1040,28 @@ with tab1:
 
             cre_table["TAT(Avg)"] = cre_table["tat_avg_sec"].apply(_format_tat)
 
-            # Reorder columns and sort by Assigned descending
-            desired_order_cols = [c for c in ["CRE", "Assigned", "Open leads", "UT", "Touched", "Followup", "Won", "Lost", "TAT(Avg)"] if c in cre_table.columns]
+            desired_order_cols = [c for c in ["CRE", "Assigned", "QL", "Untouched", "Open leads", "Retailed", "Lost", "TAT(Avg)"] if c in cre_table.columns]
             cre_table = cre_table[desired_order_cols]
             if "Assigned" in cre_table.columns:
                 cre_table = cre_table.sort_values("Assigned", ascending=False)
 
-            # Prepare pinned TOTAL row (within the same grid)
-            numeric_cols = [c for c in ["Assigned", "Open leads", "UT", "Touched", "Followup", "Won", "Lost"] if c in cre_table.columns]
+            numeric_cols = [c for c in ["Assigned", "Open leads", "Retailed", "Untouched", "Lost"] if c in cre_table.columns]
             total_values = {c: int(cre_table[c].sum()) for c in numeric_cols}
             total_row_dict = {**{"CRE": "TOTAL"}, **total_values}
-            # Compute total-average TAT over all valid rows
+            # Include QL in totals if present
+            if "QL" in cre_table.columns:
+                total_row_dict["QL"] = int(cre_table["QL"].sum())
             total_avg_tat_sec = float(df_tat_valid["tat_sec"].mean()) if not df_tat_valid.empty else 0.0
             total_row_dict["TAT(Avg)"] = _format_tat(total_avg_tat_sec)
 
-            # Dynamically size the table so CRE names (index) are fully visible
             try:
                 max_cre_len = int(cre_table["CRE"].astype(str).str.len().max()) if not cre_table.empty else 10
             except Exception:
                 max_cre_len = 10
-            per_char_px = 9  # approximate px per character in default font
+            per_char_px = 9
             index_padding_px = 80
-            other_columns_px = 280  # space for numeric columns
+            other_columns_px = 280
             desired_width = max(420, min(1200, per_char_px * max_cre_len + index_padding_px + other_columns_px))
-            # Render a simple Streamlit table with TOTAL appended (classic view)
             cre_table_with_total = pd.concat([cre_table, pd.DataFrame([total_row_dict])], ignore_index=True)
             total_rows = int(len(cre_table_with_total))
             row_px = 34
@@ -1014,7 +1075,7 @@ with tab1:
                     lambda row: [highlight_css] * len(row) if str(row.get("CRE", "")) == "TOTAL" else [""] * len(row),
                     axis=1,
                 )
-                with cre_col:
+                with cre_tab_left:
                     st.dataframe(
                         styled,
                         use_container_width=True,
@@ -1022,7 +1083,7 @@ with tab1:
                         hide_index=True,
                     )
             except Exception:
-                with cre_col:
+                with cre_tab_left:
                     st.dataframe(
                         df_display,
                         use_container_width=True,
@@ -1033,76 +1094,3 @@ with tab1:
             st.info("No CRE data available to display.")
     except Exception as err:
         st.warning(f"Could not load CRE Performance data: {err}")
-
-    # PS Performance (beside CRE), date filter based on ps_assigned_at
-    with ps_col:
-        try:
-            ps_res = (
-                supabase
-                .table("ps_followup_master")
-                .select("ps_name", "ps_branch", "ps_assigned_at")
-                .execute()
-            )
-            df_ps = pd.DataFrame(ps_res.data)
-
-            # Apply Admin date filter using ps_assigned_at
-            df_ps_filtered = df_ps.copy()
-            if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
-                if not df_ps.empty and "ps_assigned_at" in df_ps.columns:
-                    ps_assigned_ts = pd.to_datetime(df_ps["ps_assigned_at"], errors="coerce", utc=True)
-                    mask_ps = ps_assigned_ts.between(start_dt_admin, end_dt_admin)
-                    df_ps_filtered = df_ps.loc[mask_ps].copy()
-
-            # Branch filter dropdown (from filtered data)
-            if not df_ps_filtered.empty and "ps_branch" in df_ps_filtered.columns:
-                branches = (
-                    pd.Series(sorted(df_ps_filtered["ps_branch"].fillna("").astype(str).str.strip().replace("", "Unknown").unique()))
-                    .tolist()
-                )
-            else:
-                branches = []
-
-            branch_options = ["All"] + branches if branches else ["All"]
-
-            # Top row: Title on left, Branch filter dropdown on right (utilize header space)
-            ps_title_col, ps_filter_col = st.columns([0.5, 0.5])
-            with ps_title_col:
-                st.subheader("PS Performance")
-            with ps_filter_col:
-                selected_branch = st.selectbox("Branch", options=branch_options, index=0, key="ps_branch_filter", label_visibility="collapsed")
-
-            # Filter by selected branch (unless All)
-            df_ps_branch = df_ps_filtered.copy()
-            if selected_branch != "All":
-                df_ps_branch = df_ps_branch[df_ps_branch["ps_branch"].fillna("").astype(str).str.strip().replace("", "Unknown") == selected_branch]
-
-            # Build PS table: PS and Assigned counts for (branch, date) selection
-            if not df_ps_branch.empty and "ps_name" in df_ps_branch.columns:
-                ps_series = df_ps_branch["ps_name"].fillna("").astype(str).str.strip().replace("", "Unassigned PS")
-                assigned_df = (
-                    ps_series.value_counts().rename_axis("PS").reset_index(name="Assigned")
-                )
-                assigned_df = assigned_df.sort_values(["Assigned", "PS"], ascending=[False, True])
-
-                # Append TOTAL row at the end
-                total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
-                total_row_ps = pd.DataFrame({"PS": ["TOTAL"], "Assigned": [total_assigned]})
-                assigned_df_display = pd.concat([assigned_df, total_row_ps], ignore_index=True)
-
-                # Compute a simple height for pleasant display
-                total_rows_ps = int(len(assigned_df_display)) + 1  # include header
-                row_px_ps = 34
-                header_px_ps = 38
-                padding_px_ps = 12
-                height_ps = header_px_ps + row_px_ps * total_rows_ps + padding_px_ps
-                st.dataframe(assigned_df_display, use_container_width=True, height=height_ps, hide_index=True)
-            else:
-                st.info("No PS records available for the selected range/branch.")
-        except Exception as err:
-            st.warning(f"Could not load PS Performance data: {err}")
-
-with tab2:
-    st.info("Walkin (branch-wise) has been moved to the Admin tab next to ETBR.")
-
-with tab3:
-    st.info("CRE Performance has been moved to the Admin tab below the Source-wise Lead Count chart.")
