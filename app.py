@@ -914,6 +914,21 @@ with tab1:
                 .reset_index(name="Assigned")
             )
 
+            # Won / Lost counts per CRE from final_status
+            df_status = pd.DataFrame({
+                "CRE": cre_series,
+                "final_status_clean": final_status_series,
+            })
+            df_status_valid = df_status[df_status["CRE"] != "Unassigned Leads"].copy()
+            won_counts_status = (
+                df_status_valid[df_status_valid["final_status_clean"] == "won"]
+                .groupby("CRE").size().reset_index(name="Won")
+            )
+            lost_counts_status = (
+                df_status_valid[df_status_valid["final_status_clean"] == "lost"]
+                .groupby("CRE").size().reset_index(name="Lost")
+            )
+
             # Compute TAT average per CRE (in seconds) for rows where TAT is present
             tat_series_raw = pd.to_numeric(df_cre_filtered.get("tat", pd.Series(dtype=float)), errors="coerce")
             df_tat = pd.DataFrame({"CRE": cre_series, "tat_sec": tat_series_raw})
@@ -926,6 +941,8 @@ with tab1:
                 cre_names
                 .merge(agg_counts, on="CRE", how="left")
                 .merge(assigned_counts, on="CRE", how="left")
+                .merge(won_counts_status, on="CRE", how="left")
+                .merge(lost_counts_status, on="CRE", how="left")
                 .fillna({"Touched": 0, "UT": 0, "Followup": 0, "Open leads": 0, "Assigned": 0})
             )
             cre_table["Touched"] = cre_table["Touched"].astype(int)
@@ -934,6 +951,10 @@ with tab1:
             cre_table["Assigned"] = cre_table["Assigned"].astype(int)
             if "Open leads" in cre_table.columns:
                 cre_table["Open leads"] = cre_table["Open leads"].astype(int)
+            if "Won" in cre_table.columns:
+                cre_table["Won"] = cre_table["Won"].fillna(0).astype(int)
+            if "Lost" in cre_table.columns:
+                cre_table["Lost"] = cre_table["Lost"].fillna(0).astype(int)
 
             # Attach TAT averages (seconds)
             tat_avg_df = tat_avg_map.rename("tat_avg_sec").reset_index() if not tat_avg_map.empty else pd.DataFrame({"CRE": [], "tat_avg_sec": []})
@@ -957,13 +978,13 @@ with tab1:
             cre_table["TAT(Avg)"] = cre_table["tat_avg_sec"].apply(_format_tat)
 
             # Reorder columns and sort by Assigned descending
-            desired_order_cols = [c for c in ["CRE", "Assigned", "Open leads", "UT", "Touched", "Followup", "TAT(Avg)"] if c in cre_table.columns]
+            desired_order_cols = [c for c in ["CRE", "Assigned", "Open leads", "UT", "Touched", "Followup", "Won", "Lost", "TAT(Avg)"] if c in cre_table.columns]
             cre_table = cre_table[desired_order_cols]
             if "Assigned" in cre_table.columns:
                 cre_table = cre_table.sort_values("Assigned", ascending=False)
 
             # Prepare pinned TOTAL row (within the same grid)
-            numeric_cols = [c for c in ["Assigned", "Open leads", "UT", "Touched", "Followup"] if c in cre_table.columns]
+            numeric_cols = [c for c in ["Assigned", "Open leads", "UT", "Touched", "Followup", "Won", "Lost"] if c in cre_table.columns]
             total_values = {c: int(cre_table[c].sum()) for c in numeric_cols}
             total_row_dict = {**{"CRE": "TOTAL"}, **total_values}
             # Compute total-average TAT over all valid rows
