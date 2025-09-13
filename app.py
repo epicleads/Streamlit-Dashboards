@@ -852,10 +852,28 @@ with tab1:
                     df_walkin_admin[df_walkin_admin["status"].astype(str).str.strip().str.lower() == "pending"]
                     .groupby("branch").size().rename_axis("branch").reset_index(name="pending")
                 )
-                won_counts_admin = (
-                    df_walkin_admin[df_walkin_admin["status"].astype(str).str.strip().str.lower() == "won"]
-                    .groupby("branch").size().rename_axis("branch").reset_index(name="won")
-                )
+                # Won counts using updated_at filter instead of created_at
+                won_counts_admin = pd.DataFrame({"branch": [], "won": []})
+                if (
+                    filter_option_admin != "All time"
+                    and start_dt_admin is not None
+                    and end_dt_admin is not None
+                    and not df.empty
+                    and "updated_at" in df.columns
+                ):
+                    updated_ts_won = pd.to_datetime(df["updated_at"], errors="coerce", utc=True)
+                    mask_won = updated_ts_won.between(start_dt_admin, end_dt_admin)
+                    df_won_admin = df.loc[mask_won].copy()
+                    won_counts_admin = (
+                        df_won_admin[df_won_admin["status"].astype(str).str.strip().str.lower() == "won"]
+                        .groupby("branch").size().rename_axis("branch").reset_index(name="won")
+                    )
+                else:
+                    # Fallback to created_at filtering if updated_at is not available or "All time" is selected
+                    won_counts_admin = (
+                        df_walkin_admin[df_walkin_admin["status"].astype(str).str.strip().str.lower() == "won"]
+                        .groupby("branch").size().rename_axis("branch").reset_index(name="won")
+                    )
                 lost_counts_admin = (
                     df_walkin_admin[df_walkin_admin["status"].astype(str).str.strip().str.lower() == "lost"]
                     .groupby("branch").size().rename_axis("branch").reset_index(name="lost")
