@@ -911,7 +911,7 @@ with tab1:
             lm_res = (
                 supabase
                 .table("lead_master")
-                .select("branch", "created_at", "ps_name", "source", "final_status")
+                .select("branch", "ps_assigned_at", "ps_name", "source", "final_status")
                 .execute()
             )
             df_lm = pd.DataFrame(lm_res.data)
@@ -919,9 +919,9 @@ with tab1:
             # Apply global/Overall date filter on created_at
             df_lm_filtered = df_lm.copy()
             if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
-                if not df_lm.empty and "created_at" in df_lm.columns:
-                    created_ts_lm = pd.to_datetime(df_lm["created_at"], errors="coerce", utc=True)
-                    mask_lm = created_ts_lm.between(start_dt_admin, end_dt_admin)
+                if not df_lm.empty and "ps_assigned_at" in df_lm.columns:
+                    assigned_ts_lm = pd.to_datetime(df_lm["ps_assigned_at"], errors="coerce", utc=True)
+                    mask_lm = assigned_ts_lm.between(start_dt_admin, end_dt_admin)
                     df_lm_filtered = df_lm.loc[mask_lm].copy()
 
             # Build table with unique branch values and Leads Assigned count (ps_name not null)
