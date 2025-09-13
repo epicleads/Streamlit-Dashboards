@@ -207,7 +207,7 @@ with col_kpi_3:
             .not_.is_("ps_name", "null")
         )
         if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
-            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+            q = q.gte("ps_assigned_at", start_dt_global.isoformat()).lte("ps_assigned_at", end_dt_global.isoformat())
         curr_resp = q.execute()
         ps_count = int(curr_resp.count or 0)
 
@@ -217,8 +217,8 @@ with col_kpi_3:
                 .table("lead_master")
                 .select("id", count="exact")
                 .not_.is_("ps_name", "null")
-                .gte("created_at", prev_start_global.isoformat())
-                .lte("created_at", prev_end_global.isoformat())
+                .gte("ps_assigned_at", prev_start_global.isoformat())
+                .lte("ps_assigned_at", prev_end_global.isoformat())
                 .execute()
             )
             prev_ps_count = int(prev_q.count or 0)
@@ -233,7 +233,7 @@ with col_kpi_3:
         # Compute total leads for percentage
         q_total_leads_ps = supabase.table("lead_master").select("id", count="exact")
         if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
-            q_total_leads_ps = q_total_leads_ps.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+            q_total_leads_ps = q_total_leads_ps.gte("ps_assigned_at", start_dt_global.isoformat()).lte("ps_assigned_at", end_dt_global.isoformat())
         total_leads_resp_ps = q_total_leads_ps.execute()
         total_leads_count_ps = int(total_leads_resp_ps.count or 0)
         ps_assigned_pct = (ps_count / total_leads_count_ps * 100.0) if total_leads_count_ps else 0.0
@@ -500,36 +500,83 @@ with col_kpi_7:
 
 with col_kpi_8:
     try:
-        q = (
-            supabase
-            .table("walkin_table")
-            .select("id", count="exact")
-            .eq("status", "Won")
-        )
+        # Build Walkin Won count with robust date-column fallback: won_timestamp → updated_at → created_at
+        filter_cols_priority = ["won_timestamp", "updated_at", "created_at"]
+        walkin_won_count = 0
+        last_err = None
         if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
-            q = q.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
-        curr_resp = q.execute()
-        walkin_won_count = int(curr_resp.count or 0)
+            for col_name in filter_cols_priority:
+                try:
+                    q = (
+                        supabase
+                        .table("walkin_table")
+                        .select("id", count="exact")
+                        .eq("status", "Won")
+                        .gte(col_name, start_dt_global.isoformat())
+                        .lte(col_name, end_dt_global.isoformat())
+                    )
+                    curr_resp = q.execute()
+                    walkin_won_count = int(curr_resp.count or 0)
+                    last_err = None
+                    break
+                except Exception as _err:
+                    last_err = _err
+        else:
+            try:
+                curr_resp = (
+                    supabase
+                    .table("walkin_table")
+                    .select("id", count="exact")
+                    .eq("status", "Won")
+                    .execute()
+                )
+                walkin_won_count = int(curr_resp.count or 0)
+            except Exception as _err:
+                last_err = _err
 
         # Compute conversion percentage: (Walkin Won / Total Walkins) * 100
-        q_total_walkin = supabase.table("walkin_table").select("id", count="exact")
+        # Total walkins with the same fallback
+        total_walkin_count = 0
         if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
-            q_total_walkin = q_total_walkin.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
-        total_walkin_resp = q_total_walkin.execute()
-        total_walkin_count = int(total_walkin_resp.count or 0)
+            for col_name in filter_cols_priority:
+                try:
+                    q_total_walkin = (
+                        supabase
+                        .table("walkin_table")
+                        .select("id", count="exact")
+                        .gte(col_name, start_dt_global.isoformat())
+                        .lte(col_name, end_dt_global.isoformat())
+                    )
+                    total_walkin_resp = q_total_walkin.execute()
+                    total_walkin_count = int(total_walkin_resp.count or 0)
+                    break
+                except Exception:
+                    continue
+        else:
+            try:
+                total_walkin_resp = supabase.table("walkin_table").select("id", count="exact").execute()
+                total_walkin_count = int(total_walkin_resp.count or 0)
+            except Exception:
+                total_walkin_count = 0
         walkin_won_pct = (walkin_won_count / total_walkin_count * 100.0) if total_walkin_count else 0.0
 
         if prev_start_global is not None and prev_end_global is not None:
-            prev_q = (
-                supabase
-                .table("walkin_table")
-                .select("id", count="exact")
-                .eq("status", "Won")
-                .gte("created_at", prev_start_global.isoformat())
-                .lte("created_at", prev_end_global.isoformat())
-                .execute()
-            )
-            prev_walkin_won_count = int(prev_q.count or 0)
+            prev_walkin_won_count = 0
+            for col_name in filter_cols_priority:
+                try:
+                    prev_q = (
+                        supabase
+                        .table("walkin_table")
+                        .select("id", count="exact")
+                        .eq("status", "Won")
+                        .gte(col_name, prev_start_global.isoformat())
+                        .lte(col_name, prev_end_global.isoformat())
+                        .execute()
+                    )
+                    prev_walkin_won_count = int(prev_q.count or 0)
+                    break
+                except Exception:
+                    continue
             if prev_walkin_won_count == 0:
                 delta_walkin_won = "+∞%" if walkin_won_count > 0 else "0%"
             else:
@@ -713,7 +760,7 @@ with tab1:
                         .eq("source", src)
                     )
                     if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
-                        q_conv = q_conv.gte("created_at", start_dt_admin.isoformat()).lte("created_at", end_dt_admin.isoformat())
+                        q_conv = q_conv.gte("ps_assigned_at", start_dt_admin.isoformat()).lte("ps_assigned_at", end_dt_admin.isoformat())
                     r_conv = q_conv.execute()
                     enquiry_map_conv[src] = int(r_conv.count or 0)
                 sources_df["Enquiry"] = sources_df["Source"].map(enquiry_map_conv).astype(int)
@@ -1107,7 +1154,11 @@ with tab1:
                 with _dl_right:
                     st.subheader("Branches")
                     try:
-                        st.dataframe(branches_unique_df[["Branch"]], use_container_width=True, hide_index=True)
+                        cols_to_show = [c for c in ["Branch", "Leads Assigned"] if c in branches_unique_df.columns]
+                        if cols_to_show:
+                            st.dataframe(branches_unique_df[cols_to_show], use_container_width=True, hide_index=True)
+                        else:
+                            st.dataframe(branches_unique_df[["Branch"]], use_container_width=True, hide_index=True)
                     except Exception:
                         st.dataframe(pd.DataFrame({"Branch": []}), use_container_width=True, hide_index=True)
             else:
