@@ -721,12 +721,30 @@ with tab1:
                     df_walkin_admin = df.loc[mask_walkin].copy()
 
                 walkin_total = int(len(df_walkin_admin))
-                if "status" in df_walkin_admin.columns:
+                # Walkin Won using updated_at filter instead of created_at
+                walkin_won = 0
+                if (
+                    filter_option_admin != "All time"
+                    and start_dt_admin is not None
+                    and end_dt_admin is not None
+                    and not df.empty
+                    and "updated_at" in df.columns
+                    and "status" in df.columns
+                ):
+                    updated_ts_walkin_won = pd.to_datetime(df["updated_at"], errors="coerce", utc=True)
+                    mask_walkin_won = updated_ts_walkin_won.between(start_dt_admin, end_dt_admin)
+                    df_walkin_won_admin = df.loc[mask_walkin_won].copy()
                     walkin_won = int(
-                        (df_walkin_admin["status"].astype(str).str.strip().str.lower() == "won").sum()
+                        (df_walkin_won_admin["status"].astype(str).str.strip().str.lower() == "won").sum()
                     )
                 else:
-                    walkin_won = 0
+                    # Fallback to created_at filtering if updated_at is not available or "All time" is selected
+                    if "status" in df_walkin_admin.columns:
+                        walkin_won = int(
+                            (df_walkin_admin["status"].astype(str).str.strip().str.lower() == "won").sum()
+                        )
+                    else:
+                        walkin_won = 0
 
                 # Compute Walkin TD total consistent with Walkin (branch-wise)
                 td_total_walkin = 0
