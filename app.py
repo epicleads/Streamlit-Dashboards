@@ -821,7 +821,7 @@ with tab1:
 
     # CRE Performance table moved here under Admin (below charts), keeping same sizing
     st.subheader("CRE Performance")
-    cre_col, _cre_spacer = st.columns([0.5, 0.5])
+    cre_col, ps_col = st.columns([0.5, 0.5])
     try:
         # Fetch CRE data (and created_at for filtering) from lead_master
         cre_res = (
@@ -1033,6 +1033,73 @@ with tab1:
             st.info("No CRE data available to display.")
     except Exception as err:
         st.warning(f"Could not load CRE Performance data: {err}")
+
+    # PS Performance (beside CRE), date filter based on ps_assigned_at
+    with ps_col:
+        try:
+            ps_res = (
+                supabase
+                .table("ps_followup_master")
+                .select("ps_name", "ps_branch", "ps_assigned_at")
+                .execute()
+            )
+            df_ps = pd.DataFrame(ps_res.data)
+
+            # Apply Admin date filter using ps_assigned_at
+            df_ps_filtered = df_ps.copy()
+            if filter_option_admin != "All time" and start_dt_admin is not None and end_dt_admin is not None:
+                if not df_ps.empty and "ps_assigned_at" in df_ps.columns:
+                    ps_assigned_ts = pd.to_datetime(df_ps["ps_assigned_at"], errors="coerce", utc=True)
+                    mask_ps = ps_assigned_ts.between(start_dt_admin, end_dt_admin)
+                    df_ps_filtered = df_ps.loc[mask_ps].copy()
+
+            # Branch filter dropdown (from filtered data)
+            if not df_ps_filtered.empty and "ps_branch" in df_ps_filtered.columns:
+                branches = (
+                    pd.Series(sorted(df_ps_filtered["ps_branch"].fillna("").astype(str).str.strip().replace("", "Unknown").unique()))
+                    .tolist()
+                )
+            else:
+                branches = []
+
+            branch_options = ["All"] + branches if branches else ["All"]
+
+            # Top row: Title on left, Branch filter dropdown on right (utilize header space)
+            ps_title_col, ps_filter_col = st.columns([0.5, 0.5])
+            with ps_title_col:
+                st.subheader("PS Performance")
+            with ps_filter_col:
+                selected_branch = st.selectbox("Branch", options=branch_options, index=0, key="ps_branch_filter", label_visibility="collapsed")
+
+            # Filter by selected branch (unless All)
+            df_ps_branch = df_ps_filtered.copy()
+            if selected_branch != "All":
+                df_ps_branch = df_ps_branch[df_ps_branch["ps_branch"].fillna("").astype(str).str.strip().replace("", "Unknown") == selected_branch]
+
+            # Build PS table: PS and Assigned counts for (branch, date) selection
+            if not df_ps_branch.empty and "ps_name" in df_ps_branch.columns:
+                ps_series = df_ps_branch["ps_name"].fillna("").astype(str).str.strip().replace("", "Unassigned PS")
+                assigned_df = (
+                    ps_series.value_counts().rename_axis("PS").reset_index(name="Assigned")
+                )
+                assigned_df = assigned_df.sort_values(["Assigned", "PS"], ascending=[False, True])
+
+                # Append TOTAL row at the end
+                total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
+                total_row_ps = pd.DataFrame({"PS": ["TOTAL"], "Assigned": [total_assigned]})
+                assigned_df_display = pd.concat([assigned_df, total_row_ps], ignore_index=True)
+
+                # Compute a simple height for pleasant display
+                total_rows_ps = int(len(assigned_df_display)) + 1  # include header
+                row_px_ps = 34
+                header_px_ps = 38
+                padding_px_ps = 12
+                height_ps = header_px_ps + row_px_ps * total_rows_ps + padding_px_ps
+                st.dataframe(assigned_df_display, use_container_width=True, height=height_ps, hide_index=True)
+            else:
+                st.info("No PS records available for the selected range/branch.")
+        except Exception as err:
+            st.warning(f"Could not load PS Performance data: {err}")
 
 with tab2:
     st.info("Walkin (branch-wise) has been moved to the Admin tab next to ETBR.")
