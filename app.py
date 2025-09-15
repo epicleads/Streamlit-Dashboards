@@ -1637,6 +1637,7 @@ with tab2:
             title_col, filter_col = st.columns([0.5, 0.5])
             with title_col:
                 st.subheader("PS Performance")
+                st.caption("Note: values in Won and Lost columns may differ as it is under development.")
             with filter_col:
                 selected_branch = st.selectbox("Branch", options=branch_options, index=0, key="ps_branch_filter", label_visibility="collapsed")
 
