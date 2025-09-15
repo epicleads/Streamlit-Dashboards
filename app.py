@@ -152,7 +152,7 @@ elif filter_option_global == "Custom Range":
         prev_start_global = prev_end_global - duration + pd.Timedelta(milliseconds=1)
 
 # KPI cards (top): All in one row
-col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6, col_kpi_7, col_kpi_8 = st.columns(8)
+col_kpi_1, col_kpi_2, col_kpi_3, col_kpi_4, col_kpi_5, col_kpi_6, col_kpi_7, col_kpi_8, col_kpi_9 = st.columns(9)
 with col_kpi_1:
     try:
         q = supabase.table("lead_master").select("id", count="exact")
@@ -644,6 +644,89 @@ with col_kpi_8:
     except Exception as err:
         st.warning(f"Could not load KPI (Walkin Won): {err}")
 
+with col_kpi_9:
+    try:
+        # Count test drives from ps_followup_master with updated_at filter
+        ps_td_count = 0
+        try:
+            q_ps_td = (
+                supabase
+                .table("ps_followup_master")
+                .select("id", count="exact")
+                .eq("test_drive_done", True)
+            )
+            if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                q_ps_td = q_ps_td.gte("updated_at", start_dt_global.isoformat()).lte("updated_at", end_dt_global.isoformat())
+            ps_td_resp = q_ps_td.execute()
+            ps_td_count = int(ps_td_resp.count or 0)
+        except Exception:
+            ps_td_count = 0
+
+        # Count test drives from walkin_table with updated_at filter
+        walkin_td_count = 0
+        try:
+            q_walkin_td = (
+                supabase
+                .table("walkin_table")
+                .select("id", count="exact")
+                .eq("test_drive_done", True)
+            )
+            if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                q_walkin_td = q_walkin_td.gte("updated_at", start_dt_global.isoformat()).lte("updated_at", end_dt_global.isoformat())
+            walkin_td_resp = q_walkin_td.execute()
+            walkin_td_count = int(walkin_td_resp.count or 0)
+        except Exception:
+            walkin_td_count = 0
+
+        # Total test drives
+        total_td_count = ps_td_count + walkin_td_count
+
+        # Calculate previous period for delta
+        prev_total_td_count = 0
+        if prev_start_global is not None and prev_end_global is not None:
+            # Previous period ps_followup_master test drives
+            try:
+                prev_q_ps_td = (
+                    supabase
+                    .table("ps_followup_master")
+                    .select("id", count="exact")
+                    .eq("test_drive_done", True)
+                    .gte("updated_at", prev_start_global.isoformat())
+                    .lte("updated_at", prev_end_global.isoformat())
+                )
+                prev_ps_td_resp = prev_q_ps_td.execute()
+                prev_ps_td_count = int(prev_ps_td_resp.count or 0)
+            except Exception:
+                prev_ps_td_count = 0
+
+            # Previous period walkin_table test drives
+            try:
+                prev_q_walkin_td = (
+                    supabase
+                    .table("walkin_table")
+                    .select("id", count="exact")
+                    .eq("test_drive_done", True)
+                    .gte("updated_at", prev_start_global.isoformat())
+                    .lte("updated_at", prev_end_global.isoformat())
+                )
+                prev_walkin_td_resp = prev_q_walkin_td.execute()
+                prev_walkin_td_count = int(prev_walkin_td_resp.count or 0)
+            except Exception:
+                prev_walkin_td_count = 0
+
+            prev_total_td_count = prev_ps_td_count + prev_walkin_td_count
+
+        # Calculate delta
+        if prev_total_td_count == 0:
+            delta_td = "+∞%" if total_td_count > 0 else "0%"
+        else:
+            pct_change_td = (total_td_count - prev_total_td_count) / prev_total_td_count * 100.0
+            delta_td = f"{pct_change_td:+.1f}%"
+
+        st.metric(label="Test Drives Done", value=total_td_count, delta=delta_td)
+    except Exception as err:
+        st.warning(f"Could not load KPI (Test Drives Done): {err}")
+
 # Horizontal navigation tabs for different dashboard sections
 tab1, tab2, tab3 = st.tabs(["Overall", "Branch Performance", "👥 CRE Performance"])
 
@@ -702,7 +785,7 @@ with tab1:
             st.info("No lead sources available to display.")
 
     with mid_col:
-        st.subheader("ETBR")
+        st.subheader("ETBR (Overall)")
         if not df_leads_filtered.empty and "source" in df_leads_filtered.columns:
             # Clean the filtered data
             df_leads_clean = df_leads_filtered.copy()
@@ -1835,11 +1918,13 @@ with tab2:
                     else:
                         ps_unique = pd.DataFrame({"PS": []})
 
-                    # Compute Punched, Untouched and Won counts per PS
+                    # Compute Punched, Untouched, Pending, Won and Lost counts per PS
                     ps_names = ps_unique["PS"].tolist()
                     punched_counts = []
                     untouched_counts = []
+                    pending_counts = []
                     won_counts = []
+                    lost_counts = []
                     for ps_name in ps_names:
                         # Map display "Unassigned PS" back to empty string for filtering
                         ps_filter_val = "" if str(ps_name).strip().lower() == "unassigned ps" else ps_name
@@ -1877,6 +1962,23 @@ with tab2:
                         except Exception:
                             untouched_counts.append(0)
 
+                        # Pending = rows where status = 'Pending' (date filter on created_at)
+                        try:
+                            q_pend = (
+                                supabase
+                                .table("walkin_table")
+                                .select("id", count="exact")
+                                .eq("ps_assigned", ps_filter_val)
+                                .eq("status", "Pending")
+                            )
+                            if selected_branch != "All":
+                                q_pend = q_pend.eq("branch", selected_branch)
+                            if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                                q_pend = q_pend.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+                            r_pend = q_pend.execute()
+                            pending_counts.append(int(r_pend.count or 0))
+                        except Exception:
+                            pending_counts.append(0)
 
                         # Won = rows where status = 'Won' (date filter on updated_at)
                         try:
@@ -1896,19 +1998,49 @@ with tab2:
                         except Exception:
                             won_counts.append(0)
 
-                    walkin_display = pd.DataFrame({"PS": ps_names, "Punched": punched_counts, "Untouched": untouched_counts, "Won": won_counts})
+                        # Lost = rows where status = 'Lost' (date filter on created_at)
+                        try:
+                            q_lost = (
+                                supabase
+                                .table("walkin_table")
+                                .select("id", count="exact")
+                                .eq("ps_assigned", ps_filter_val)
+                                .eq("status", "Lost")
+                            )
+                            if selected_branch != "All":
+                                q_lost = q_lost.eq("branch", selected_branch)
+                            if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                                q_lost = q_lost.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+                            r_lost = q_lost.execute()
+                            lost_counts.append(int(r_lost.count or 0))
+                        except Exception:
+                            lost_counts.append(0)
+
+                    # Calculate Conversion(%) = Won/Punched*100
+                    conversion_pcts = []
+                    for i in range(len(ps_names)):
+                        if punched_counts[i] > 0:
+                            conv_pct = round((won_counts[i] / punched_counts[i]) * 100, 2)
+                        else:
+                            conv_pct = 0.0
+                        conversion_pcts.append(conv_pct)
+
+                    walkin_display = pd.DataFrame({"PS": ps_names, "Punched": punched_counts, "Untouched": untouched_counts, "Pending": pending_counts, "Won": won_counts, "Lost": lost_counts, "Conversion(%)": conversion_pcts})
                     # Append TOTAL row
                     total_punched = int(walkin_display["Punched"].sum()) if not walkin_display.empty else 0
                     total_untouched = int(walkin_display["Untouched"].sum()) if not walkin_display.empty else 0
+                    total_pending = int(walkin_display["Pending"].sum()) if not walkin_display.empty else 0
                     total_won = int(walkin_display["Won"].sum()) if not walkin_display.empty else 0
+                    total_lost = int(walkin_display["Lost"].sum()) if not walkin_display.empty else 0
+                    total_conv_pct = round((total_won / total_punched) * 100, 2) if total_punched > 0 else 0.0
                     walkin_display = pd.concat([
                         walkin_display,
-                        pd.DataFrame({"PS": ["TOTAL"], "Punched": [total_punched], "Untouched": [total_untouched], "Won": [total_won]})
+                        pd.DataFrame({"PS": ["TOTAL"], "Punched": [total_punched], "Untouched": [total_untouched], "Pending": [total_pending], "Won": [total_won], "Lost": [total_lost], "Conversion(%)": [total_conv_pct]})
                     ], ignore_index=True)
 
                     st.dataframe(walkin_display, use_container_width=True, hide_index=True, height=height_ps)
                 except Exception:
-                    st.dataframe(pd.DataFrame({"PS": [], "Punched": [], "Untouched": [], "Won": []}), use_container_width=True, hide_index=True, height=height_ps)
+                    st.dataframe(pd.DataFrame({"PS": [], "Punched": [], "Untouched": [], "Pending": [], "Won": [], "Lost": [], "Conversion(%)": []}), use_container_width=True, hide_index=True, height=height_ps)
         else:
             st.info("No PS records available for the selected range/branch.")
     except Exception as err:
