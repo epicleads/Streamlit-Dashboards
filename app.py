@@ -1799,6 +1799,116 @@ with tab2:
             height_ps = header_px_ps + row_px_ps * total_rows_ps + padding_px_ps
             with ps_left_col:
                 st.dataframe(assigned_df_display, use_container_width=True, height=height_ps, hide_index=True)
+
+            # Right side: PS Performance (Walkin) - shares PS list and branch filter
+            with _ps_right_col:
+                header_left, header_right = st.columns([0.6, 0.4])
+                with header_left:
+                    st.subheader("PS Performance (Walkin)")
+                with header_right:
+                    st.caption(f"Branch: {selected_branch}")
+                try:
+                    # Fetch unique PS from walkin_table.ps_assigned with branch/global filters
+                    q_walkin_ps = (
+                        supabase
+                        .table("walkin_table")
+                        .select("ps_assigned, created_at, branch")
+                    )
+                    # Apply branch filter from Digital selection if not All
+                    if selected_branch != "All":
+                        q_walkin_ps = q_walkin_ps.eq("branch", selected_branch)
+                    # Apply global date filter on created_at
+                    if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                        q_walkin_ps = q_walkin_ps.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+                    res_walkin_ps = q_walkin_ps.execute()
+                    df_walkin_ps = pd.DataFrame(res_walkin_ps.data)
+
+                    if not df_walkin_ps.empty and "ps_assigned" in df_walkin_ps.columns:
+                        ps_unique_series = (
+                            df_walkin_ps["ps_assigned"].fillna("").astype(str).str.strip().replace("", "Unassigned PS")
+                        )
+                        ps_unique = (
+                            pd.Series(sorted(ps_unique_series.unique()))
+                            .rename("PS")
+                            .to_frame()
+                        )
+                    else:
+                        ps_unique = pd.DataFrame({"PS": []})
+
+                    # Compute Punched, Untouched and Won counts per PS
+                    ps_names = ps_unique["PS"].tolist()
+                    punched_counts = []
+                    untouched_counts = []
+                    won_counts = []
+                    for ps_name in ps_names:
+                        # Map display "Unassigned PS" back to empty string for filtering
+                        ps_filter_val = "" if str(ps_name).strip().lower() == "unassigned ps" else ps_name
+                        try:
+                            q_cnt = (
+                                supabase
+                                .table("walkin_table")
+                                .select("id", count="exact")
+                                .eq("ps_assigned", ps_filter_val)
+                            )
+                            if selected_branch != "All":
+                                q_cnt = q_cnt.eq("branch", selected_branch)
+                            if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                                q_cnt = q_cnt.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+                            r_cnt = q_cnt.execute()
+                            punched_counts.append(int(r_cnt.count or 0))
+                        except Exception:
+                            punched_counts.append(0)
+
+                        # Untouched = rows where first_call_date IS NULL
+                        try:
+                            q_ut = (
+                                supabase
+                                .table("walkin_table")
+                                .select("id", count="exact")
+                                .eq("ps_assigned", ps_filter_val)
+                                .is_("first_call_date", "null")
+                            )
+                            if selected_branch != "All":
+                                q_ut = q_ut.eq("branch", selected_branch)
+                            if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                                q_ut = q_ut.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+                            r_ut = q_ut.execute()
+                            untouched_counts.append(int(r_ut.count or 0))
+                        except Exception:
+                            untouched_counts.append(0)
+
+
+                        # Won = rows where status = 'Won' (date filter on updated_at)
+                        try:
+                            q_won = (
+                                supabase
+                                .table("walkin_table")
+                                .select("id", count="exact")
+                                .eq("ps_assigned", ps_filter_val)
+                                .eq("status", "Won")
+                            )
+                            if selected_branch != "All":
+                                q_won = q_won.eq("branch", selected_branch)
+                            if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
+                                q_won = q_won.gte("updated_at", start_dt_global.isoformat()).lte("updated_at", end_dt_global.isoformat())
+                            r_won = q_won.execute()
+                            won_counts.append(int(r_won.count or 0))
+                        except Exception:
+                            won_counts.append(0)
+
+                    walkin_display = pd.DataFrame({"PS": ps_names, "Punched": punched_counts, "Untouched": untouched_counts, "Won": won_counts})
+                    # Append TOTAL row
+                    total_punched = int(walkin_display["Punched"].sum()) if not walkin_display.empty else 0
+                    total_untouched = int(walkin_display["Untouched"].sum()) if not walkin_display.empty else 0
+                    total_won = int(walkin_display["Won"].sum()) if not walkin_display.empty else 0
+                    walkin_display = pd.concat([
+                        walkin_display,
+                        pd.DataFrame({"PS": ["TOTAL"], "Punched": [total_punched], "Untouched": [total_untouched], "Won": [total_won]})
+                    ], ignore_index=True)
+
+                    st.dataframe(walkin_display, use_container_width=True, hide_index=True, height=height_ps)
+                except Exception:
+                    st.dataframe(pd.DataFrame({"PS": [], "Punched": [], "Untouched": [], "Won": []}), use_container_width=True, hide_index=True, height=height_ps)
         else:
             st.info("No PS records available for the selected range/branch.")
     except Exception as err:
