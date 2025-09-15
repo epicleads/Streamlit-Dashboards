@@ -251,10 +251,10 @@ with col_kpi_3:
         else:
             delta3 = "—"
 
-        # Compute total leads for percentage
+        # Compute total leads for percentage (use same base as Leads KPI → created_at)
         q_total_leads_ps = supabase.table("lead_master").select("id", count="exact")
         if filter_option_global != "All time" and start_dt_global is not None and end_dt_global is not None:
-            q_total_leads_ps = q_total_leads_ps.gte("ps_assigned_at", start_dt_global.isoformat()).lte("ps_assigned_at", end_dt_global.isoformat())
+            q_total_leads_ps = q_total_leads_ps.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
         total_leads_resp_ps = q_total_leads_ps.execute()
         total_leads_count_ps = int(total_leads_resp_ps.count or 0)
         ps_assigned_pct = (ps_count / total_leads_count_ps * 100.0) if total_leads_count_ps else 0.0
@@ -1382,13 +1382,17 @@ with tab1:
                                             .select("id", count="exact")
                                             .eq("status", "Won")
                                         )
+                                        # Apply date filter for non-"All time" using updated_at
+                                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                            q_ww = q_ww.gte("updated_at", start_dt_ps.isoformat()).lte("updated_at", end_dt_ps.isoformat())
                                         try:
                                             r_ww = q_ww.in_("ps_assigned", ps_list).execute()
                                             total_won += int(r_ww.count or 0)
                                         except Exception:
                                             subtotal = 0
                                             for psn in ps_list:
-                                                r_wwl = q_ww.eq("ps_assigned", psn).execute()
+                                                q_ww_each = q_ww.eq("ps_assigned", psn)
+                                                r_wwl = q_ww_each.execute()
                                                 subtotal += int(r_wwl.count or 0)
                                                 q_ww = (
                                                     supabase
@@ -1396,6 +1400,8 @@ with tab1:
                                                     .select("id", count="exact")
                                                     .eq("status", "Won")
                                                 )
+                                                if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                                    q_ww = q_ww.gte("updated_at", start_dt_ps.isoformat()).lte("updated_at", end_dt_ps.isoformat())
                                             total_won += subtotal
                                     except Exception:
                                         pass
@@ -1408,13 +1414,17 @@ with tab1:
                                             .select("id", count="exact")
                                             .eq("final_status", "Won")
                                         )
+                                        # Apply date filter for non-"All time" using won_timestamp
+                                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                            q_pw = q_pw.gte("won_timestamp", start_dt_ps.isoformat()).lte("won_timestamp", end_dt_ps.isoformat())
                                         try:
                                             r_pw = q_pw.in_("ps_name", ps_list).execute()
                                             total_won += int(r_pw.count or 0)
                                         except Exception:
                                             subtotal = 0
                                             for psn in ps_list:
-                                                r_pwl = q_pw.eq("ps_name", psn).execute()
+                                                q_pw_each = q_pw.eq("ps_name", psn)
+                                                r_pwl = q_pw_each.execute()
                                                 subtotal += int(r_pwl.count or 0)
                                                 q_pw = (
                                                     supabase
@@ -1422,6 +1432,8 @@ with tab1:
                                                     .select("id", count="exact")
                                                     .eq("final_status", "Won")
                                                 )
+                                                if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                                    q_pw = q_pw.gte("won_timestamp", start_dt_ps.isoformat()).lte("won_timestamp", end_dt_ps.isoformat())
                                             total_won += subtotal
                                     except Exception:
                                         pass
@@ -1434,13 +1446,17 @@ with tab1:
                                             .select("id", count="exact")
                                             .eq("final_status", "Won")
                                         )
+                                        # Apply date filter for non-"All time" using created_at
+                                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                            q_aw = q_aw.gte("created_at", start_dt_ps.isoformat()).lte("created_at", end_dt_ps.isoformat())
                                         try:
                                             r_aw = q_aw.in_("ps_name", ps_list).execute()
                                             total_won += int(r_aw.count or 0)
                                         except Exception:
                                             subtotal = 0
                                             for psn in ps_list:
-                                                r_awl = q_aw.eq("ps_name", psn).execute()
+                                                q_aw_each = q_aw.eq("ps_name", psn)
+                                                r_awl = q_aw_each.execute()
                                                 subtotal += int(r_awl.count or 0)
                                                 q_aw = (
                                                     supabase
@@ -1448,6 +1464,8 @@ with tab1:
                                                     .select("id", count="exact")
                                                     .eq("final_status", "Won")
                                                 )
+                                                if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                                    q_aw = q_aw.gte("created_at", start_dt_ps.isoformat()).lte("created_at", end_dt_ps.isoformat())
                                             total_won += subtotal
                                     except Exception:
                                         pass
@@ -1461,13 +1479,17 @@ with tab1:
                                             .select("id", count="exact")
                                             .eq("status", "Lost")
                                         )
+                                        # Apply date filter for non-"All time" using updated_at
+                                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                            q_wl = q_wl.gte("updated_at", start_dt_ps.isoformat()).lte("updated_at", end_dt_ps.isoformat())
                                         try:
-                                            r_wl = q_wl.in_("ps_assigned", ps_list).execute()
-                                            lost_branch = int(r_wl.count or 0)
+                                            r_wl_many = q_wl.in_("ps_assigned", ps_list).execute()
+                                            lost_branch = int(r_wl_many.count or 0)
                                         except Exception:
                                             lost_branch = 0
                                             for psn in ps_list:
-                                                r_wll = q_wl.eq("ps_assigned", psn).execute()
+                                                q_wl_each = q_wl.eq("ps_assigned", psn)
+                                                r_wll = q_wl_each.execute()
                                                 lost_branch += int(r_wll.count or 0)
                                                 q_wl = (
                                                     supabase
@@ -1475,6 +1497,8 @@ with tab1:
                                                     .select("id", count="exact")
                                                     .eq("status", "Lost")
                                                 )
+                                                if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                                    q_wl = q_wl.gte("updated_at", start_dt_ps.isoformat()).lte("updated_at", end_dt_ps.isoformat())
                                     except Exception:
                                         lost_branch = 0
 
@@ -1486,12 +1510,16 @@ with tab1:
                                             .select("id", count="exact")
                                             .eq("final_status", "Lost")
                                         )
+                                        # Apply date filter for non-"All time" using won_timestamp (as requested)
+                                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                            q_pl = q_pl.gte("won_timestamp", start_dt_ps.isoformat()).lte("won_timestamp", end_dt_ps.isoformat())
                                         try:
-                                            r_pl2 = q_pl.in_("ps_name", ps_list).execute()
-                                            lost_branch += int(r_pl2.count or 0)
+                                            r_pl_many = q_pl.in_("ps_name", ps_list).execute()
+                                            lost_branch += int(r_pl_many.count or 0)
                                         except Exception:
                                             for psn in ps_list:
-                                                r_pll = q_pl.eq("ps_name", psn).execute()
+                                                q_pl_each = q_pl.eq("ps_name", psn)
+                                                r_pll = q_pl_each.execute()
                                                 lost_branch += int(r_pll.count or 0)
                                                 q_pl = (
                                                     supabase
@@ -1499,6 +1527,8 @@ with tab1:
                                                     .select("id", count="exact")
                                                     .eq("final_status", "Lost")
                                                 )
+                                                if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                                    q_pl = q_pl.gte("won_timestamp", start_dt_ps.isoformat()).lte("won_timestamp", end_dt_ps.isoformat())
                                     except Exception:
                                         pass
 
@@ -1510,12 +1540,16 @@ with tab1:
                                             .select("id", count="exact")
                                             .eq("final_status", "Lost")
                                         )
+                                        # Apply date filter for non-"All time" using created_at
+                                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                            q_al = q_al.gte("created_at", start_dt_ps.isoformat()).lte("created_at", end_dt_ps.isoformat())
                                         try:
-                                            r_al = q_al.in_("ps_name", ps_list).execute()
-                                            lost_branch += int(r_al.count or 0)
+                                            r_al_many = q_al.in_("ps_name", ps_list).execute()
+                                            lost_branch += int(r_al_many.count or 0)
                                         except Exception:
                                             for psn in ps_list:
-                                                r_all = q_al.eq("ps_name", psn).execute()
+                                                q_al_each = q_al.eq("ps_name", psn)
+                                                r_all = q_al_each.execute()
                                                 lost_branch += int(r_all.count or 0)
                                                 q_al = (
                                                     supabase
@@ -1523,6 +1557,8 @@ with tab1:
                                                     .select("id", count="exact")
                                                     .eq("final_status", "Lost")
                                                 )
+                                                if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                                                    q_al = q_al.gte("created_at", start_dt_ps.isoformat()).lte("created_at", end_dt_ps.isoformat())
                                     except Exception:
                                         pass
                                 else:
