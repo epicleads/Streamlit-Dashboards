@@ -16,6 +16,7 @@ import streamlit as st
 import altair as alt
 import pandas as pd
 from datetime import datetime, date, timedelta
+from auth import init_session_state, login_form, admin_user_management, require_auth, require_admin, show_sidebar_navigation
 
 # Load environment variables
 load_dotenv()
@@ -27,6 +28,9 @@ def init_supabase() -> Client:
     return create_client(SUPABASE_URL, SUPABASE_ANON_KEY)
 
 supabase = init_supabase()
+
+# Initialize authentication
+init_session_state(supabase)
 
 # Fetch data
 res = supabase.table("walkin_table").select("*").execute()
@@ -80,6 +84,23 @@ if "_printed_local_url" not in st.session_state:
     host = os.environ.get("STREAMLIT_SERVER_ADDRESS", "localhost")
     print(f"Local URL: http://{host}:{port}")
     st.session_state["_printed_local_url"] = True
+
+# Check authentication
+if not require_auth():
+    st.stop()
+
+# Show sidebar navigation
+show_sidebar_navigation()
+
+# Check if user wants to manage users (admin only)
+if "show_user_management" in st.session_state and st.session_state.show_user_management:
+    if require_admin():
+        admin_user_management()
+    else:
+        st.error("You don't have permission to access user management.")
+        st.session_state.show_user_management = False
+        st.rerun()
+    st.stop()
 
 st.title("Analytics Dashboard")
 
