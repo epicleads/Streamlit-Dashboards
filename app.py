@@ -1637,8 +1637,7 @@ with tab2:
         with ps_left_col:
             title_col, filter_col = st.columns([0.5, 0.5])
             with title_col:
-                st.subheader("PS Performance")
-                st.caption("Note: values in Won and Lost columns may differ as it is under development.")
+                st.subheader("PS Performance (Digital)")
             with filter_col:
                 selected_branch = st.selectbox("Branch", options=branch_options, index=0, key="ps_branch_filter", label_visibility="collapsed")
 
@@ -1701,139 +1700,57 @@ with tab2:
                     else:
                         untouched_count = 0
                     
-                    # Compute Pending count across three sources for this PS
+                    # Compute Pending leads from ps_followup_master for this PS
                     pending_total = 0
-                    # 1) walkin_table: status Pending AND ps_assigned = ps_name
                     try:
-                        r_walkin_pending = (
-                            supabase
-                            .table("walkin_table")
-                            .select("id", count="exact")
-                            .eq("status", "Pending")
-                            .eq("ps_assigned", ps_name)
-                            .execute()
-                        )
-                        pending_total += int(r_walkin_pending.count or 0)
-                    except Exception:
-                        pass
-
-                    # 2) ps_followup_master: final_status Pending AND first_call_date IS NOT NULL AND ps_name = ps_name
-                    try:
-                        r_ps_pending = (
+                        pending_query = (
                             supabase
                             .table("ps_followup_master")
                             .select("id", count="exact")
-                            .eq("final_status", "Pending")
-                            .eq("ps_name", ps_name)
-                            .not_.is_("first_call_date", "null")
-                            .execute()
-                        )
-                        pending_total += int(r_ps_pending.count or 0)
-                    except Exception:
-                        pass
-
-                    # 3) activity_leads: final_status Pending AND ps_first_call_date IS NOT NULL AND ps_name = ps_name
-                    try:
-                        r_act_pending = (
-                            supabase
-                            .table("activity_leads")
-                            .select("id", count="exact")
                             .eq("ps_name", ps_name)
                             .eq("final_status", "Pending")
-                            .not_.is_("ps_first_call_date", "null")
-                            .execute()
                         )
-                        pending_total += int(r_act_pending.count or 0)
+                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                            pending_query = pending_query.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                        r_pending = pending_query.execute()
+                        pending_total = int(r_pending.count or 0)
                     except Exception:
-                        pass
+                        pending_total = 0
 
-                    # Compute Won count across three sources for this PS
+                    # Compute Won leads from ps_followup_master for this PS
                     won_total = 0
-                    # 1) walkin_table: status Won AND ps_assigned = ps_name
                     try:
-                        r_walkin_won = (
-                            supabase
-                            .table("walkin_table")
-                            .select("id", count="exact")
-                            .eq("status", "Won")
-                            .eq("ps_assigned", ps_name)
-                            .execute()
-                        )
-                        won_total += int(r_walkin_won.count or 0)
-                    except Exception:
-                        pass
-
-                    # 2) ps_followup_master: final_status Won AND ps_name = ps_name
-                    try:
-                        r_ps_won = (
+                        won_query = (
                             supabase
                             .table("ps_followup_master")
                             .select("id", count="exact")
-                            .eq("final_status", "Won")
-                            .eq("ps_name", ps_name)
-                            .execute()
-                        )
-                        won_total += int(r_ps_won.count or 0)
-                    except Exception:
-                        pass
-
-                    # 3) activity_leads: final_status Won AND ps_name = ps_name
-                    try:
-                        r_act_won = (
-                            supabase
-                            .table("activity_leads")
-                            .select("id", count="exact")
                             .eq("ps_name", ps_name)
                             .eq("final_status", "Won")
-                            .execute()
                         )
-                        won_total += int(r_act_won.count or 0)
+                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                            won_query = won_query.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                        r_won = won_query.execute()
+                        won_total = int(r_won.count or 0)
                     except Exception:
-                        pass
+                        won_total = 0
 
-                    # Compute Lost count across three sources for this PS
+                    # Compute Lost leads from ps_followup_master for this PS
                     lost_total = 0
-                    # 1) walkin_table: status Lost AND ps_assigned = ps_name
                     try:
-                        r_walkin_lost = (
-                            supabase
-                            .table("walkin_table")
-                            .select("id", count="exact")
-                            .eq("status", "Lost")
-                            .eq("ps_assigned", ps_name)
-                            .execute()
-                        )
-                        lost_total += int(r_walkin_lost.count or 0)
-                    except Exception:
-                        pass
-
-                    # 2) ps_followup_master: final_status Lost AND ps_name = ps_name
-                    try:
-                        r_ps_lost = (
+                        lost_query = (
                             supabase
                             .table("ps_followup_master")
                             .select("id", count="exact")
-                            .eq("final_status", "Lost")
-                            .eq("ps_name", ps_name)
-                            .execute()
-                        )
-                        lost_total += int(r_ps_lost.count or 0)
-                    except Exception:
-                        pass
-
-                    # 3) activity_leads: final_status Lost AND ps_name = ps_name
-                    try:
-                        r_act_lost = (
-                            supabase
-                            .table("activity_leads")
-                            .select("id", count="exact")
                             .eq("ps_name", ps_name)
                             .eq("final_status", "Lost")
-                            .execute()
                         )
-                        lost_total += int(r_act_lost.count or 0)
+                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                            lost_query = lost_query.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                        r_lost = lost_query.execute()
+                        lost_total = int(r_lost.count or 0)
                     except Exception:
-                        pass
+                        lost_total = 0
+                    # We no longer compute Open Leads, Won, or Lost for PS Performance
                     
                 except Exception as e:
                     st.write(f"Error calculating untouched for {ps_name}: {e}")
@@ -1848,17 +1765,31 @@ with tab2:
                 lost_counts.append(lost_total)
             
             assigned_df["Untouched"] = untouched_counts
-            assigned_df["Open Leads"] = pending_counts
+            assigned_df["Pending leads"] = pending_counts
             assigned_df["Won"] = won_counts
             assigned_df["Lost"] = lost_counts
+            # Conversion percentage per PS: (Won / Assigned) * 100
+            assigned_df["Conversion(%)"] = assigned_df.apply(
+                lambda r: round((r["Won"] / r["Assigned"] * 100.0) if r["Assigned"] else 0.0, 2),
+                axis=1,
+            )
             assigned_df = assigned_df.sort_values(["Assigned", "PS"], ascending=[False, True])
 
             total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
             total_untouched = int(assigned_df["Untouched"].sum()) if not assigned_df.empty else 0
-            total_pending = int(assigned_df["Open Leads"].sum()) if not assigned_df.empty else 0
+            total_pending = int(assigned_df["Pending leads"].sum()) if not assigned_df.empty else 0
             total_won = int(assigned_df["Won"].sum()) if not assigned_df.empty else 0
             total_lost = int(assigned_df["Lost"].sum()) if not assigned_df.empty else 0
-            total_row_ps = pd.DataFrame({"PS": ["TOTAL"], "Assigned": [total_assigned], "Untouched": [total_untouched], "Open Leads": [total_pending], "Won": [total_won], "Lost": [total_lost]})
+            total_conv_pct = round(((total_won / total_assigned) * 100.0) if total_assigned else 0.0, 2)
+            total_row_ps = pd.DataFrame({
+                "PS": ["TOTAL"],
+                "Assigned": [total_assigned],
+                "Untouched": [total_untouched],
+                "Pending leads": [total_pending],
+                "Won": [total_won],
+                "Lost": [total_lost],
+                "Conversion(%)": [total_conv_pct],
+            })
             assigned_df_display = pd.concat([assigned_df, total_row_ps], ignore_index=True)
 
             total_rows_ps = int(len(assigned_df_display)) + 1
