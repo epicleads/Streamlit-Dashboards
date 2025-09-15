@@ -1585,6 +1585,7 @@ with tab1:
                 # Right column: Branch-only table
                 with _dl_right:
                     st.subheader("Branches")
+                    st.caption("Note: values in Won and Lost columns may differ as it is under development.")
                     try:
                         cols_to_show = [c for c in ["Branch", "Leads Assigned", "Untouched", "Open Leads", "Won", "Lost"] if c in branches_unique_df.columns]
                         if cols_to_show:
