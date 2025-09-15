@@ -37,7 +37,7 @@ res = supabase.table("walkin_table").select("*").execute()
 df = pd.DataFrame(res.data)
 
 # Page layout and CSS to left-align content and use full width
-st.set_page_config(page_title="Analytics Dashboard", layout="wide")
+st.set_page_config(page_title="Analytics Dashboard", layout="wide", initial_sidebar_state="collapsed")
 st.markdown(
     """
     <style>
@@ -1207,11 +1207,350 @@ with tab1:
                 except Exception:
                     st.dataframe(display_lb, use_container_width=True, hide_index=False)
 
+                # Compute PS Untouched per branch (from ps_followup_master) using global Admin date filter
+                try:
+                    ps_overall_res = (
+                        supabase
+                        .table("ps_followup_master")
+                        .select("ps_branch", "ps_assigned_at", "final_status", "lead_status", "first_call_date", "ps_name")
+                        .execute()
+                    )
+                    df_ps_overall = pd.DataFrame(ps_overall_res.data)
+                    if not df_ps_overall.empty:
+                        # Apply admin/global date filter on ps_assigned_at
+                        if (
+                            filter_option_admin != "All time"
+                            and start_dt_admin is not None
+                            and end_dt_admin is not None
+                            and "ps_assigned_at" in df_ps_overall.columns
+                        ):
+                            ts_ps_all = pd.to_datetime(df_ps_overall["ps_assigned_at"], errors="coerce", utc=True)
+                            mask_ps_all = ts_ps_all.between(start_dt_admin, end_dt_admin)
+                            df_ps_overall = df_ps_overall.loc[mask_ps_all].copy()
+
+                        # Clean branch names to align with branches_unique_df
+                        branch_clean_ps = (
+                            df_ps_overall.get("ps_branch", pd.Series(dtype=object))
+                            .fillna("")
+                            .astype(str)
+                            .str.strip()
+                            .replace("", "Unknown")
+                        )
+
+                        # Untouched mask per PS logic
+                        lead_status_ps = df_ps_overall.get("lead_status", pd.Series(dtype=object))
+                        final_status_ps = df_ps_overall.get("final_status", pd.Series(dtype=object))
+                        first_call_ps = df_ps_overall.get("first_call_date", pd.Series(dtype=object))
+
+                        exclude_statuses = [
+                            'Lost to Codealer', 'Lost to Competition', 'Dropped', 'Booked', 'Retailed',
+                            'Call me Back', 'RNR', 'Busy on another Call', 'Call Disconnected', 'Call not Connected'
+                        ]
+                        untouched_mask_ps = (
+                            (final_status_ps.fillna("Pending").astype(str).str.strip().str.lower().isin(["pending"]))
+                            | (final_status_ps.isna())
+                        ) & (first_call_ps.isna()) & (
+                            lead_status_ps.isna() | (~lead_status_ps.astype(str).isin(exclude_statuses))
+                        )
+
+                        df_untouched_ps = (
+                            branch_clean_ps[untouched_mask_ps]
+                            .value_counts()
+                            .rename_axis("Branch")
+                            .reset_index(name="Untouched")
+                        )
+
+                        # Merge into branches summary table
+                        branches_unique_df = (
+                            branches_unique_df
+                            .merge(df_untouched_ps, on="Branch", how="left")
+                            .fillna({"Untouched": 0})
+                        )
+                        branches_unique_df["Untouched"] = branches_unique_df["Untouched"].astype(int)
+
+                        # Compute Open Leads per branch by summing PS-level open leads logic
+                        # Build mapping Branch -> PS list
+                        branch_to_ps_df = pd.DataFrame({
+                            "Branch": branch_clean_ps,
+                            "PS": df_ps_overall.get("ps_name", pd.Series(dtype=object)).astype(str)
+                        })
+                        unique_branches_list = branches_unique_df["Branch"].tolist()
+                        open_leads_values = []
+                        won_values = []
+                        lost_values = []
+                        for br in unique_branches_list:
+                            try:
+                                ps_list = (
+                                    branch_to_ps_df[branch_to_ps_df["Branch"].fillna("").astype(str).str.strip().replace("", "Unknown") == br]["PS"]
+                                    .dropna()
+                                    .astype(str)
+                                    .str.strip()
+                                    .tolist()
+                                )
+                                ps_list = [p for p in ps_list if p and p.lower() != "unassigned ps"]
+                                total_open = 0
+                                total_won = 0
+                                if ps_list:
+                                    # walkin_table Pending by ps_assigned in ps_list
+                                    try:
+                                        q_w = (
+                                            supabase
+                                            .table("walkin_table")
+                                            .select("id", count="exact")
+                                            .eq("status", "Pending")
+                                        )
+                                        try:
+                                            r_w = q_w.in_("ps_assigned", ps_list).execute()
+                                            total_open += int(r_w.count or 0)
+                                        except Exception:
+                                            subtotal = 0
+                                            for psn in ps_list:
+                                                r_wl = q_w.eq("ps_assigned", psn).execute()
+                                                subtotal += int(r_wl.count or 0)
+                                                q_w = (
+                                                    supabase
+                                                    .table("walkin_table")
+                                                    .select("id", count="exact")
+                                                    .eq("status", "Pending")
+                                                )
+                                            total_open += subtotal
+                                    except Exception:
+                                        pass
+
+                                    # ps_followup_master Pending with first_call_date not null
+                                    try:
+                                        q_p = (
+                                            supabase
+                                            .table("ps_followup_master")
+                                            .select("id", count="exact")
+                                            .eq("final_status", "Pending")
+                                            .not_.is_("first_call_date", "null")
+                                        )
+                                        try:
+                                            r_p = q_p.in_("ps_name", ps_list).execute()
+                                            total_open += int(r_p.count or 0)
+                                        except Exception:
+                                            subtotal = 0
+                                            for psn in ps_list:
+                                                r_pl = q_p.eq("ps_name", psn).execute()
+                                                subtotal += int(r_pl.count or 0)
+                                                q_p = (
+                                                    supabase
+                                                    .table("ps_followup_master")
+                                                    .select("id", count="exact")
+                                                    .eq("final_status", "Pending")
+                                                    .not_.is_("first_call_date", "null")
+                                                )
+                                            total_open += subtotal
+                                    except Exception:
+                                        pass
+
+                                    # activity_leads Pending with ps_first_call_date not null
+                                    try:
+                                        q_a = (
+                                            supabase
+                                            .table("activity_leads")
+                                            .select("id", count="exact")
+                                            .eq("final_status", "Pending")
+                                            .not_.is_("ps_first_call_date", "null")
+                                        )
+                                        try:
+                                            r_a = q_a.in_("ps_name", ps_list).execute()
+                                            total_open += int(r_a.count or 0)
+                                        except Exception:
+                                            subtotal = 0
+                                            for psn in ps_list:
+                                                r_al = q_a.eq("ps_name", psn).execute()
+                                                subtotal += int(r_al.count or 0)
+                                                q_a = (
+                                                    supabase
+                                                    .table("activity_leads")
+                                                    .select("id", count="exact")
+                                                    .eq("final_status", "Pending")
+                                                    .not_.is_("ps_first_call_date", "null")
+                                                )
+                                            total_open += subtotal
+                                    except Exception:
+                                        pass
+
+                                    # Won across three sources for PS list
+                                    # walkin_table Won
+                                    try:
+                                        q_ww = (
+                                            supabase
+                                            .table("walkin_table")
+                                            .select("id", count="exact")
+                                            .eq("status", "Won")
+                                        )
+                                        try:
+                                            r_ww = q_ww.in_("ps_assigned", ps_list).execute()
+                                            total_won += int(r_ww.count or 0)
+                                        except Exception:
+                                            subtotal = 0
+                                            for psn in ps_list:
+                                                r_wwl = q_ww.eq("ps_assigned", psn).execute()
+                                                subtotal += int(r_wwl.count or 0)
+                                                q_ww = (
+                                                    supabase
+                                                    .table("walkin_table")
+                                                    .select("id", count="exact")
+                                                    .eq("status", "Won")
+                                                )
+                                            total_won += subtotal
+                                    except Exception:
+                                        pass
+
+                                    # ps_followup_master Won
+                                    try:
+                                        q_pw = (
+                                            supabase
+                                            .table("ps_followup_master")
+                                            .select("id", count="exact")
+                                            .eq("final_status", "Won")
+                                        )
+                                        try:
+                                            r_pw = q_pw.in_("ps_name", ps_list).execute()
+                                            total_won += int(r_pw.count or 0)
+                                        except Exception:
+                                            subtotal = 0
+                                            for psn in ps_list:
+                                                r_pwl = q_pw.eq("ps_name", psn).execute()
+                                                subtotal += int(r_pwl.count or 0)
+                                                q_pw = (
+                                                    supabase
+                                                    .table("ps_followup_master")
+                                                    .select("id", count="exact")
+                                                    .eq("final_status", "Won")
+                                                )
+                                            total_won += subtotal
+                                    except Exception:
+                                        pass
+
+                                    # activity_leads Won
+                                    try:
+                                        q_aw = (
+                                            supabase
+                                            .table("activity_leads")
+                                            .select("id", count="exact")
+                                            .eq("final_status", "Won")
+                                        )
+                                        try:
+                                            r_aw = q_aw.in_("ps_name", ps_list).execute()
+                                            total_won += int(r_aw.count or 0)
+                                        except Exception:
+                                            subtotal = 0
+                                            for psn in ps_list:
+                                                r_awl = q_aw.eq("ps_name", psn).execute()
+                                                subtotal += int(r_awl.count or 0)
+                                                q_aw = (
+                                                    supabase
+                                                    .table("activity_leads")
+                                                    .select("id", count="exact")
+                                                    .eq("final_status", "Won")
+                                                )
+                                            total_won += subtotal
+                                    except Exception:
+                                        pass
+
+                                    # Lost across three sources for PS list
+                                    # walkin_table Lost
+                                    try:
+                                        q_wl = (
+                                            supabase
+                                            .table("walkin_table")
+                                            .select("id", count="exact")
+                                            .eq("status", "Lost")
+                                        )
+                                        try:
+                                            r_wl = q_wl.in_("ps_assigned", ps_list).execute()
+                                            lost_branch = int(r_wl.count or 0)
+                                        except Exception:
+                                            lost_branch = 0
+                                            for psn in ps_list:
+                                                r_wll = q_wl.eq("ps_assigned", psn).execute()
+                                                lost_branch += int(r_wll.count or 0)
+                                                q_wl = (
+                                                    supabase
+                                                    .table("walkin_table")
+                                                    .select("id", count="exact")
+                                                    .eq("status", "Lost")
+                                                )
+                                    except Exception:
+                                        lost_branch = 0
+
+                                    # ps_followup_master Lost
+                                    try:
+                                        q_pl = (
+                                            supabase
+                                            .table("ps_followup_master")
+                                            .select("id", count="exact")
+                                            .eq("final_status", "Lost")
+                                        )
+                                        try:
+                                            r_pl2 = q_pl.in_("ps_name", ps_list).execute()
+                                            lost_branch += int(r_pl2.count or 0)
+                                        except Exception:
+                                            for psn in ps_list:
+                                                r_pll = q_pl.eq("ps_name", psn).execute()
+                                                lost_branch += int(r_pll.count or 0)
+                                                q_pl = (
+                                                    supabase
+                                                    .table("ps_followup_master")
+                                                    .select("id", count="exact")
+                                                    .eq("final_status", "Lost")
+                                                )
+                                    except Exception:
+                                        pass
+
+                                    # activity_leads Lost
+                                    try:
+                                        q_al = (
+                                            supabase
+                                            .table("activity_leads")
+                                            .select("id", count="exact")
+                                            .eq("final_status", "Lost")
+                                        )
+                                        try:
+                                            r_al = q_al.in_("ps_name", ps_list).execute()
+                                            lost_branch += int(r_al.count or 0)
+                                        except Exception:
+                                            for psn in ps_list:
+                                                r_all = q_al.eq("ps_name", psn).execute()
+                                                lost_branch += int(r_all.count or 0)
+                                                q_al = (
+                                                    supabase
+                                                    .table("activity_leads")
+                                                    .select("id", count="exact")
+                                                    .eq("final_status", "Lost")
+                                                )
+                                    except Exception:
+                                        pass
+                                else:
+                                    lost_branch = 0
+                                open_leads_values.append(int(total_open))
+                                won_values.append(int(total_won))
+                                lost_values.append(int(lost_branch))
+                            except Exception:
+                                open_leads_values.append(0)
+                                won_values.append(0)
+                                lost_values.append(0)
+
+                        branches_unique_df = branches_unique_df.merge(
+                            pd.DataFrame({"Branch": unique_branches_list, "Open Leads": open_leads_values, "Won": won_values, "Lost": lost_values}),
+                            on="Branch",
+                            how="left",
+                        )
+                        branches_unique_df["Open Leads"] = branches_unique_df["Open Leads"].fillna(0).astype(int)
+                        branches_unique_df["Won"] = branches_unique_df["Won"].fillna(0).astype(int)
+                        branches_unique_df["Lost"] = branches_unique_df["Lost"].fillna(0).astype(int)
+                except Exception:
+                    pass
+
                 # Right column: Branch-only table
                 with _dl_right:
                     st.subheader("Branches")
                     try:
-                        cols_to_show = [c for c in ["Branch", "Leads Assigned"] if c in branches_unique_df.columns]
+                        cols_to_show = [c for c in ["Branch", "Leads Assigned", "Untouched", "Open Leads", "Won", "Lost"] if c in branches_unique_df.columns]
                         if cols_to_show:
                             st.dataframe(branches_unique_df[cols_to_show], use_container_width=True, hide_index=True)
                         else:
@@ -1270,16 +1609,218 @@ with tab2:
         if selected_branch != "All":
             df_ps_branch = df_ps_branch[df_ps_branch["ps_branch"].fillna("").astype(str).str.strip().replace("", "Unknown") == selected_branch]
 
-        # Build PS table: PS and Assigned counts
+        # Build PS table: PS, Assigned, Untouched, and Pending counts
         if not df_ps_branch.empty and "ps_name" in df_ps_branch.columns:
             ps_series = df_ps_branch["ps_name"].fillna("").astype(str).str.strip().replace("", "Unassigned PS")
             assigned_df = (
                 ps_series.value_counts().rename_axis("PS").reset_index(name="Assigned")
             )
+            
+            # Calculate untouched leads for each PS
+            untouched_counts = []
+            pending_counts = []
+            won_counts = []
+            lost_counts = []
+            for ps_name in assigned_df["PS"]:
+                if ps_name == "Unassigned PS":
+                    untouched_counts.append(0)
+                    pending_counts.append(0)
+                    won_counts.append(0)
+                    lost_counts.append(0)
+                    continue
+                
+                try:
+                    # Query untouched leads for this PS from ps_followup_master
+                    untouched_query = (
+                        supabase
+                        .table("ps_followup_master")
+                        .select("lead_uid", "final_status", "lead_status", "first_call_date")
+                        .eq("ps_name", ps_name)
+                    )
+                    
+                    # Apply date filter if not "All time"
+                    if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                        untouched_query = untouched_query.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                    
+                    untouched_res = untouched_query.execute()
+                    untouched_data = pd.DataFrame(untouched_res.data)
+                    
+                    if not untouched_data.empty:
+                        # Filter for untouched leads
+                        untouched_mask = (
+                            (untouched_data["final_status"] == "Pending") | 
+                            (untouched_data["final_status"].isna())
+                        ) & (
+                            untouched_data["first_call_date"].isna()
+                        ) & (
+                            (untouched_data["lead_status"].isna()) | 
+                            (~untouched_data["lead_status"].isin([
+                                'Lost to Codealer', 'Lost to Competition', 'Dropped', 'Booked', 'Retailed',
+                                'Call me Back', 'RNR', 'Busy on another Call', 'Call Disconnected', 'Call not Connected'
+                            ]))
+                        )
+                        untouched_count = int(untouched_mask.sum())
+                    else:
+                        untouched_count = 0
+                    
+                    # Compute Pending count across three sources for this PS
+                    pending_total = 0
+                    # 1) walkin_table: status Pending AND ps_assigned = ps_name
+                    try:
+                        r_walkin_pending = (
+                            supabase
+                            .table("walkin_table")
+                            .select("id", count="exact")
+                            .eq("status", "Pending")
+                            .eq("ps_assigned", ps_name)
+                            .execute()
+                        )
+                        pending_total += int(r_walkin_pending.count or 0)
+                    except Exception:
+                        pass
+
+                    # 2) ps_followup_master: final_status Pending AND first_call_date IS NOT NULL AND ps_name = ps_name
+                    try:
+                        r_ps_pending = (
+                            supabase
+                            .table("ps_followup_master")
+                            .select("id", count="exact")
+                            .eq("final_status", "Pending")
+                            .eq("ps_name", ps_name)
+                            .not_.is_("first_call_date", "null")
+                            .execute()
+                        )
+                        pending_total += int(r_ps_pending.count or 0)
+                    except Exception:
+                        pass
+
+                    # 3) activity_leads: final_status Pending AND ps_first_call_date IS NOT NULL AND ps_name = ps_name
+                    try:
+                        r_act_pending = (
+                            supabase
+                            .table("activity_leads")
+                            .select("id", count="exact")
+                            .eq("ps_name", ps_name)
+                            .eq("final_status", "Pending")
+                            .not_.is_("ps_first_call_date", "null")
+                            .execute()
+                        )
+                        pending_total += int(r_act_pending.count or 0)
+                    except Exception:
+                        pass
+
+                    # Compute Won count across three sources for this PS
+                    won_total = 0
+                    # 1) walkin_table: status Won AND ps_assigned = ps_name
+                    try:
+                        r_walkin_won = (
+                            supabase
+                            .table("walkin_table")
+                            .select("id", count="exact")
+                            .eq("status", "Won")
+                            .eq("ps_assigned", ps_name)
+                            .execute()
+                        )
+                        won_total += int(r_walkin_won.count or 0)
+                    except Exception:
+                        pass
+
+                    # 2) ps_followup_master: final_status Won AND ps_name = ps_name
+                    try:
+                        r_ps_won = (
+                            supabase
+                            .table("ps_followup_master")
+                            .select("id", count="exact")
+                            .eq("final_status", "Won")
+                            .eq("ps_name", ps_name)
+                            .execute()
+                        )
+                        won_total += int(r_ps_won.count or 0)
+                    except Exception:
+                        pass
+
+                    # 3) activity_leads: final_status Won AND ps_name = ps_name
+                    try:
+                        r_act_won = (
+                            supabase
+                            .table("activity_leads")
+                            .select("id", count="exact")
+                            .eq("ps_name", ps_name)
+                            .eq("final_status", "Won")
+                            .execute()
+                        )
+                        won_total += int(r_act_won.count or 0)
+                    except Exception:
+                        pass
+
+                    # Compute Lost count across three sources for this PS
+                    lost_total = 0
+                    # 1) walkin_table: status Lost AND ps_assigned = ps_name
+                    try:
+                        r_walkin_lost = (
+                            supabase
+                            .table("walkin_table")
+                            .select("id", count="exact")
+                            .eq("status", "Lost")
+                            .eq("ps_assigned", ps_name)
+                            .execute()
+                        )
+                        lost_total += int(r_walkin_lost.count or 0)
+                    except Exception:
+                        pass
+
+                    # 2) ps_followup_master: final_status Lost AND ps_name = ps_name
+                    try:
+                        r_ps_lost = (
+                            supabase
+                            .table("ps_followup_master")
+                            .select("id", count="exact")
+                            .eq("final_status", "Lost")
+                            .eq("ps_name", ps_name)
+                            .execute()
+                        )
+                        lost_total += int(r_ps_lost.count or 0)
+                    except Exception:
+                        pass
+
+                    # 3) activity_leads: final_status Lost AND ps_name = ps_name
+                    try:
+                        r_act_lost = (
+                            supabase
+                            .table("activity_leads")
+                            .select("id", count="exact")
+                            .eq("ps_name", ps_name)
+                            .eq("final_status", "Lost")
+                            .execute()
+                        )
+                        lost_total += int(r_act_lost.count or 0)
+                    except Exception:
+                        pass
+                    
+                except Exception as e:
+                    st.write(f"Error calculating untouched for {ps_name}: {e}")
+                    untouched_count = 0
+                    pending_total = 0
+                    won_total = 0
+                    lost_total = 0
+                
+                untouched_counts.append(untouched_count)
+                pending_counts.append(pending_total)
+                won_counts.append(won_total)
+                lost_counts.append(lost_total)
+            
+            assigned_df["Untouched"] = untouched_counts
+            assigned_df["Open Leads"] = pending_counts
+            assigned_df["Won"] = won_counts
+            assigned_df["Lost"] = lost_counts
             assigned_df = assigned_df.sort_values(["Assigned", "PS"], ascending=[False, True])
 
             total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
-            total_row_ps = pd.DataFrame({"PS": ["TOTAL"], "Assigned": [total_assigned]})
+            total_untouched = int(assigned_df["Untouched"].sum()) if not assigned_df.empty else 0
+            total_pending = int(assigned_df["Open Leads"].sum()) if not assigned_df.empty else 0
+            total_won = int(assigned_df["Won"].sum()) if not assigned_df.empty else 0
+            total_lost = int(assigned_df["Lost"].sum()) if not assigned_df.empty else 0
+            total_row_ps = pd.DataFrame({"PS": ["TOTAL"], "Assigned": [total_assigned], "Untouched": [total_untouched], "Open Leads": [total_pending], "Won": [total_won], "Lost": [total_lost]})
             assigned_df_display = pd.concat([assigned_df, total_row_ps], ignore_index=True)
 
             total_rows_ps = int(len(assigned_df_display)) + 1
