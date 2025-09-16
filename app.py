@@ -1090,9 +1090,8 @@ with tab1:
 
         st.dataframe(branches_table_display_admin, use_container_width=True, hide_index=False)
 
-    # Additional table: Unique branches from lead_master with global date filter (50% width)
-    dl_left, _dl_right = st.columns([0.75, 0.25])
-    with dl_left:
+    # Additional table: Unique branches from lead_master with global date filter (full width)
+    with st.container():
         st.subheader("Digital Leads Summary (branch-wise)")
         try:
             lm_res = (
@@ -1664,19 +1663,6 @@ with tab1:
                         branches_unique_df["Lost"] = branches_unique_df["Lost"].fillna(0).astype(int)
                 except Exception:
                     pass
-
-                # Right column: Branch-only table
-                with _dl_right:
-                    st.subheader("Branches")
-                    st.caption("Note: values in Won and Lost columns may differ as it is under development.")
-                    try:
-                        cols_to_show = [c for c in ["Branch", "Leads Assigned", "Untouched", "Open Leads", "Won", "Lost"] if c in branches_unique_df.columns]
-                        if cols_to_show:
-                            st.dataframe(branches_unique_df[cols_to_show], use_container_width=True, hide_index=True)
-                        else:
-                            st.dataframe(branches_unique_df[["Branch"]], use_container_width=True, hide_index=True)
-                    except Exception:
-                        st.dataframe(pd.DataFrame({"Branch": []}), use_container_width=True, hide_index=True)
             else:
                 st.info("No branch data available for the selected range.")
         except Exception as err:
@@ -1856,7 +1842,7 @@ with tab2:
                 lambda r: round((r["Won"] / r["Assigned"] * 100.0) if r["Assigned"] else 0.0, 2),
                 axis=1,
             )
-            assigned_df = assigned_df.sort_values(["Assigned", "PS"], ascending=[False, True])
+            assigned_df = assigned_df.sort_values(["Conversion(%)", "PS"], ascending=[False, True])
 
             total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
             total_untouched = int(assigned_df["Untouched"].sum()) if not assigned_df.empty else 0
@@ -2026,6 +2012,8 @@ with tab2:
                         conversion_pcts.append(conv_pct)
 
                     walkin_display = pd.DataFrame({"PS": ps_names, "Punched": punched_counts, "Untouched": untouched_counts, "Pending": pending_counts, "Won": won_counts, "Lost": lost_counts, "Conversion(%)": conversion_pcts})
+                    # Sort by conversion percentage descending, then by PS name ascending
+                    walkin_display = walkin_display.sort_values(["Conversion(%)", "PS"], ascending=[False, True])
                     # Append TOTAL row
                     total_punched = int(walkin_display["Punched"].sum()) if not walkin_display.empty else 0
                     total_untouched = int(walkin_display["Untouched"].sum()) if not walkin_display.empty else 0
