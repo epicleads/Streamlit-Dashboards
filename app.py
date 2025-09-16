@@ -1722,14 +1722,20 @@ with tab2:
                 ps_series.value_counts().rename_axis("PS").reset_index(name="Assigned")
             )
             
-            # Calculate untouched leads for each PS
+            # Calculate untouched leads and other metrics for each PS
             untouched_counts = []
+            hot_counts = []
+            warm_counts = []
+            cold_counts = []
             pending_counts = []
             won_counts = []
             lost_counts = []
             for ps_name in assigned_df["PS"]:
                 if ps_name == "Unassigned PS":
                     untouched_counts.append(0)
+                    hot_counts.append(0)
+                    warm_counts.append(0)
+                    cold_counts.append(0)
                     pending_counts.append(0)
                     won_counts.append(0)
                     lost_counts.append(0)
@@ -1768,7 +1774,67 @@ with tab2:
                         untouched_count = int(untouched_mask.sum())
                     else:
                         untouched_count = 0
+
+                    # Compute Hot leads for this PS
+                    hot_total = 0
+                    try:
+                        hot_query = (
+                            supabase
+                            .table("ps_followup_master")
+                            .select("id", count="exact")
+                            .eq("ps_name", ps_name)
+                            .eq("final_status", "Pending")
+                            .eq("lead_category", "Hot")
+                        )
+                        if selected_branch != "All":
+                            hot_query = hot_query.eq("ps_branch", selected_branch)
+                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                            hot_query = hot_query.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                        r_hot = hot_query.execute()
+                        hot_total = int(r_hot.count or 0)
+                    except Exception:
+                        hot_total = 0
                     
+                    # Compute Warm leads for this PS
+                    warm_total = 0
+                    try:
+                        warm_query = (
+                            supabase
+                            .table("ps_followup_master")
+                            .select("id", count="exact")
+                            .eq("ps_name", ps_name)
+                            .eq("final_status", "Pending")
+                            .eq("lead_category", "Warm")
+                        )
+                        if selected_branch != "All":
+                            warm_query = warm_query.eq("ps_branch", selected_branch)
+                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                            warm_query = warm_query.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                        r_warm = warm_query.execute()
+                        warm_total = int(r_warm.count or 0)
+                    except Exception:
+                        warm_total = 0
+
+                    # Compute Cold leads for this PS
+                    cold_total = 0
+                    try:
+                        cold_query = (
+                            supabase
+                            .table("ps_followup_master")
+                            .select("id", count="exact")
+                            .eq("ps_name", ps_name)
+                            .eq("final_status", "Pending")
+                            .eq("lead_category", "Cold")
+                        )
+                        if selected_branch != "All":
+                            cold_query = cold_query.eq("ps_branch", selected_branch)
+                        if filter_option_ps != "All time" and start_dt_ps is not None and end_dt_ps is not None:
+                            cold_query = cold_query.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                        r_cold = cold_query.execute()
+                        cold_total = int(r_cold.count or 0)
+                    except Exception:
+                        cold_total = 0
+
                     # Compute Pending leads from ps_followup_master for this PS
                     pending_total = 0
                     try:
@@ -1827,16 +1893,28 @@ with tab2:
                     pending_total = 0
                     won_total = 0
                     lost_total = 0
+                    hot_total = 0
+                    warm_total = 0
+                    cold_total = 0
                 
                 untouched_counts.append(untouched_count)
+                hot_counts.append(hot_total)
+                warm_counts.append(warm_total)
+                cold_counts.append(cold_total)
                 pending_counts.append(pending_total)
                 won_counts.append(won_total)
                 lost_counts.append(lost_total)
             
             assigned_df["Untouched"] = untouched_counts
-            assigned_df["Pending leads"] = pending_counts
+            assigned_df["Hot"] = hot_counts
+            assigned_df["Warm"] = warm_counts
+            assigned_df["Cold"] = cold_counts
+            assigned_df["Open leads"] = pending_counts
             assigned_df["Won"] = won_counts
             assigned_df["Lost"] = lost_counts
+            # Ensure column order places Hot, Warm, Cold before Pending leads
+            desired_cols = [c for c in ["PS", "Assigned", "Untouched", "Hot", "Warm", "Cold", "Open leads", "Won", "Lost"] if c in assigned_df.columns]
+            assigned_df = assigned_df[desired_cols]
             # Conversion percentage per PS: (Won / Assigned) * 100
             assigned_df["Conversion(%)"] = assigned_df.apply(
                 lambda r: round((r["Won"] / r["Assigned"] * 100.0) if r["Assigned"] else 0.0, 2),
@@ -1846,7 +1924,9 @@ with tab2:
 
             total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
             total_untouched = int(assigned_df["Untouched"].sum()) if not assigned_df.empty else 0
-            total_pending = int(assigned_df["Pending leads"].sum()) if not assigned_df.empty else 0
+            total_hot = int(assigned_df["Hot"].sum()) if "Hot" in assigned_df.columns and not assigned_df.empty else 0
+            total_warm = int(assigned_df["Warm"].sum()) if "Warm" in assigned_df.columns and not assigned_df.empty else 0
+            total_pending = int(assigned_df["Open leads"].sum()) if not assigned_df.empty else 0
             total_won = int(assigned_df["Won"].sum()) if not assigned_df.empty else 0
             total_lost = int(assigned_df["Lost"].sum()) if not assigned_df.empty else 0
             total_conv_pct = round(((total_won / total_assigned) * 100.0) if total_assigned else 0.0, 2)
@@ -1854,7 +1934,10 @@ with tab2:
                 "PS": ["TOTAL"],
                 "Assigned": [total_assigned],
                 "Untouched": [total_untouched],
-                "Pending leads": [total_pending],
+                "Hot": [total_hot],
+                "Warm": [total_warm],
+                "Cold": [int(assigned_df["Cold"].sum()) if "Cold" in assigned_df.columns and not assigned_df.empty else 0],
+                "Open leads": [total_pending],
                 "Won": [total_won],
                 "Lost": [total_lost],
                 "Conversion(%)": [total_conv_pct],
@@ -2031,19 +2114,19 @@ with tab2:
                             conv_pct = 0.0
                         conversion_pcts.append(conv_pct)
 
-                    walkin_display = pd.DataFrame({"PS": ps_names, "Punched": punched_counts, "Untouched": untouched_counts, "Pending": pending_counts, "Won": won_counts, "Lost": lost_counts, "Conversion(%)": conversion_pcts})
+                    walkin_display = pd.DataFrame({"PS": ps_names, "Punched": punched_counts, "Untouched": untouched_counts, "Open leads": pending_counts, "Won": won_counts, "Lost": lost_counts, "Conversion(%)": conversion_pcts})
                     # Sort by conversion percentage descending, then by PS name ascending
                     walkin_display = walkin_display.sort_values(["Conversion(%)", "PS"], ascending=[False, True])
                     # Append TOTAL row
                     total_punched = int(walkin_display["Punched"].sum()) if not walkin_display.empty else 0
                     total_untouched = int(walkin_display["Untouched"].sum()) if not walkin_display.empty else 0
-                    total_pending = int(walkin_display["Pending"].sum()) if not walkin_display.empty else 0
+                    total_open = int(walkin_display["Open leads"].sum()) if not walkin_display.empty else 0
                     total_won = int(walkin_display["Won"].sum()) if not walkin_display.empty else 0
                     total_lost = int(walkin_display["Lost"].sum()) if not walkin_display.empty else 0
                     total_conv_pct = round((total_won / total_punched) * 100, 2) if total_punched > 0 else 0.0
                     walkin_display = pd.concat([
                         walkin_display,
-                        pd.DataFrame({"PS": ["TOTAL"], "Punched": [total_punched], "Untouched": [total_untouched], "Pending": [total_pending], "Won": [total_won], "Lost": [total_lost], "Conversion(%)": [total_conv_pct]})
+                        pd.DataFrame({"PS": ["TOTAL"], "Punched": [total_punched], "Untouched": [total_untouched], "Open leads": [total_open], "Won": [total_won], "Lost": [total_lost], "Conversion(%)": [total_conv_pct]})
                     ], ignore_index=True)
 
                     st.dataframe(walkin_display, use_container_width=True, hide_index=True, height=height_ps)
