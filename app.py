@@ -911,8 +911,14 @@ with tab1:
             except Exception as err:
                 st.warning(f"Could not compute TD for Conversion: {err}")
 
-            # Calculate conversion percentage (Won/Count * 100)
-            sources_df["%"] = (sources_df["Won"] / sources_df["Count"] * 100).round(2)
+            # Calculate conversion percentage (QL/BR * 100) where QL = Enquiry, BR = Won
+            if "Enquiry" in sources_df.columns and "Won" in sources_df.columns:
+                sources_df["%"] = sources_df.apply(
+                    lambda r: round((r["Enquiry"] / r["Won"] * 100.0) if r["Won"] else 0.0, 2),
+                    axis=1,
+                )
+            else:
+                sources_df["%"] = 0.0
             
             # Sort by conversion percentage descending, then by count descending, then by source name
             sources_df = sources_df.sort_values(["%", "Count", "Source"], ascending=[False, False, True])
@@ -923,7 +929,7 @@ with tab1:
             total_won_src = int(sources_df["Won"].sum())
             total_enquiry_src = int(sources_df["Enquiry"].sum()) if "Enquiry" in sources_df.columns else 0
             total_td_src = int(sources_df["TD"].sum()) if "TD" in sources_df.columns else 0
-            total_conv_src = (total_won_src / total_count_src * 100.0) if total_count_src else 0.0
+            total_conv_src = (total_enquiry_src / total_won_src * 100.0) if total_won_src else 0.0
             total_row_src = pd.DataFrame({
                 "Count": [total_count_src],
                 "Enquiry": [total_enquiry_src],
@@ -1067,7 +1073,7 @@ with tab1:
                 "rows": "Punched",
                 "pending": "Pending",
                 "touched": "Touched",
-                "untouched": "Untouched",
+                "untouched": "1st Followup Pending",
                 "won": "Won",
                 "lost": "Lost",
                 "td": "TD",
@@ -1081,7 +1087,7 @@ with tab1:
             )
             branches_table_display_admin["%"] = safe_div_admin.round(2)
 
-            numeric_cols_admin = [c for c in ["Punched", "Pending", "Touched", "Untouched", "Won", "Lost", "TD"] if c in branches_table_display_admin.columns]
+            numeric_cols_admin = [c for c in ["Punched", "Pending", "Touched", "1st Followup Pending", "Won", "Lost", "TD"] if c in branches_table_display_admin.columns]
             total_row_admin = branches_table_display_admin[numeric_cols_admin].sum()
             total_row_admin["%"] = (total_row_admin["Won"] / total_row_admin["Punched"] * 100.0) if total_row_admin["Punched"] else 0.0
             total_row_admin = total_row_admin.round(2)
@@ -1951,6 +1957,15 @@ with tab2:
             height_ps = header_px_ps + row_px_ps * total_rows_ps + padding_px_ps
             with ps_left_col:
                 st.dataframe(assigned_df_display, use_container_width=True, height=height_ps, hide_index=True)
+                # Replicated table named Open Leads (uses same branch filter and data)
+                with st.container():
+                    st.subheader("Open Leads")
+                    try:
+                        keep_cols = [c for c in ["PS", "Hot", "Warm", "Cold", "Open leads"] if c in assigned_df_display.columns]
+                        open_leads_display = assigned_df_display[keep_cols]
+                    except Exception:
+                        open_leads_display = assigned_df_display
+                    st.dataframe(open_leads_display, use_container_width=True, height=height_ps, hide_index=True)
                 # Underlying PS Follow-ups (ps_followup_master) below PS Performance (Digital)
                 show_underlying_ps = st.toggle("view underlying data", value=False, key="toggle_ps_followup_branch")
                 if show_underlying_ps:
