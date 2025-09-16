@@ -1868,6 +1868,26 @@ with tab2:
             height_ps = header_px_ps + row_px_ps * total_rows_ps + padding_px_ps
             with ps_left_col:
                 st.dataframe(assigned_df_display, use_container_width=True, height=height_ps, hide_index=True)
+                # Underlying PS Follow-ups (ps_followup_master) below PS Performance (Digital)
+                show_underlying_ps = st.toggle("view underlying data", value=False, key="toggle_ps_followup_branch")
+                if show_underlying_ps:
+                    with st.container():
+                        st.subheader("PS Follow-ups (filtered by ps_assigned_at)")
+                        try:
+                            q_ps_fup = supabase.table("ps_followup_master").select("*")
+                            if (
+                                filter_option_ps != "All time"
+                                and start_dt_ps is not None
+                                and end_dt_ps is not None
+                            ):
+                                q_ps_fup = q_ps_fup.gte("ps_assigned_at", start_dt_ps.isoformat()).lte("ps_assigned_at", end_dt_ps.isoformat())
+                            ps_fup_res = q_ps_fup.execute()
+                            df_ps_fup = pd.DataFrame(ps_fup_res.data)
+
+                            st.caption(f"Rows: {len(df_ps_fup)}")
+                            st.dataframe(df_ps_fup, use_container_width=True, hide_index=False)
+                        except Exception as err:
+                            st.warning(f"Could not load ps_followup_master table: {err}")
 
             # Right side: PS Performance (Walkin) - shares PS list and branch filter
             with _ps_right_col:
@@ -2029,6 +2049,27 @@ with tab2:
                     st.dataframe(walkin_display, use_container_width=True, hide_index=True, height=height_ps)
                 except Exception:
                     st.dataframe(pd.DataFrame({"PS": [], "Punched": [], "Untouched": [], "Pending": [], "Won": [], "Lost": [], "Conversion(%)": []}), use_container_width=True, hide_index=True, height=height_ps)
+
+                # Underlying Walkin data (walkin_table) below PS Performance (Walkin)
+                show_underlying_walkin = st.toggle("view underlying data", value=False, key="toggle_walkin_branch")
+                if show_underlying_walkin:
+                    with st.container():
+                        st.subheader("Walkin (filtered by created_at)")
+                        try:
+                            q_walkin_under = supabase.table("walkin_table").select("*")
+                            if (
+                                filter_option_global != "All time"
+                                and start_dt_global is not None
+                                and end_dt_global is not None
+                            ):
+                                q_walkin_under = q_walkin_under.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+                            walkin_under_res = q_walkin_under.execute()
+                            df_walkin_under = pd.DataFrame(walkin_under_res.data)
+
+                            st.caption(f"Rows: {len(df_walkin_under)}")
+                            st.dataframe(df_walkin_under, use_container_width=True, hide_index=False)
+                        except Exception as err:
+                            st.warning(f"Could not load walkin_table: {err}")
         else:
             st.info("No PS records available for the selected range/branch.")
     except Exception as err:
@@ -2238,3 +2279,24 @@ with tab3:
             st.info("No CRE data available to display.")
     except Exception as err:
         st.warning(f"Could not load CRE Performance data: {err}")
+
+    # Lead Master table (filtered by global date range on created_at)
+    show_underlying_lm = st.toggle("view underlying data", value=False, key="toggle_lead_master_cre")
+    if show_underlying_lm:
+        with st.container():
+            st.subheader("Lead Master (filtered)")
+            try:
+                q_lm_tab3 = supabase.table("lead_master").select("*")
+                if (
+                    filter_option_global != "All time"
+                    and start_dt_global is not None
+                    and end_dt_global is not None
+                ):
+                    q_lm_tab3 = q_lm_tab3.gte("created_at", start_dt_global.isoformat()).lte("created_at", end_dt_global.isoformat())
+                lm_res_tab3 = q_lm_tab3.execute()
+                df_lm_tab3 = pd.DataFrame(lm_res_tab3.data)
+
+                st.caption(f"Rows: {len(df_lm_tab3)}")
+                st.dataframe(df_lm_tab3, use_container_width=True, hide_index=False)
+            except Exception as err:
+                st.warning(f"Could not load lead_master table: {err}")
