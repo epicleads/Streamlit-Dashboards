@@ -1918,8 +1918,12 @@ with tab2:
             assigned_df["Open leads"] = pending_counts
             assigned_df["Won"] = won_counts
             assigned_df["Lost"] = lost_counts
-            # Ensure column order places Hot, Warm, Cold before Pending leads
-            desired_cols = [c for c in ["PS", "Assigned", "Untouched", "Hot", "Warm", "Cold", "Open leads", "Won", "Lost"] if c in assigned_df.columns]
+            
+            # Create a copy with all columns for Open leads table
+            assigned_df_full = assigned_df.copy()
+            
+            # Ensure column order excludes Hot, Warm, Cold columns from PS Performance (Digital) table
+            desired_cols = [c for c in ["PS", "Assigned", "Untouched", "Open leads", "Won", "Lost"] if c in assigned_df.columns]
             assigned_df = assigned_df[desired_cols]
             # Conversion percentage per PS: (Won / Assigned) * 100
             assigned_df["Conversion(%)"] = assigned_df.apply(
@@ -1928,27 +1932,37 @@ with tab2:
             )
             assigned_df = assigned_df.sort_values(["Conversion(%)", "PS"], ascending=[False, True])
 
-            total_assigned = int(assigned_df["Assigned"].sum()) if not assigned_df.empty else 0
-            total_untouched = int(assigned_df["Untouched"].sum()) if not assigned_df.empty else 0
-            total_hot = int(assigned_df["Hot"].sum()) if "Hot" in assigned_df.columns and not assigned_df.empty else 0
-            total_warm = int(assigned_df["Warm"].sum()) if "Warm" in assigned_df.columns and not assigned_df.empty else 0
-            total_pending = int(assigned_df["Open leads"].sum()) if not assigned_df.empty else 0
-            total_won = int(assigned_df["Won"].sum()) if not assigned_df.empty else 0
-            total_lost = int(assigned_df["Lost"].sum()) if not assigned_df.empty else 0
+            total_assigned = int(assigned_df_full["Assigned"].sum()) if not assigned_df_full.empty else 0
+            total_untouched = int(assigned_df_full["Untouched"].sum()) if not assigned_df_full.empty else 0
+            total_hot = int(assigned_df_full["Hot"].sum()) if "Hot" in assigned_df_full.columns and not assigned_df_full.empty else 0
+            total_warm = int(assigned_df_full["Warm"].sum()) if "Warm" in assigned_df_full.columns and not assigned_df_full.empty else 0
+            total_cold = int(assigned_df_full["Cold"].sum()) if "Cold" in assigned_df_full.columns and not assigned_df_full.empty else 0
+            total_pending = int(assigned_df_full["Open leads"].sum()) if not assigned_df_full.empty else 0
+            total_won = int(assigned_df_full["Won"].sum()) if not assigned_df_full.empty else 0
+            total_lost = int(assigned_df_full["Lost"].sum()) if not assigned_df_full.empty else 0
             total_conv_pct = round(((total_won / total_assigned) * 100.0) if total_assigned else 0.0, 2)
+            
+            # Total row for PS Performance (Digital) table (without Hot, Warm, Cold)
             total_row_ps = pd.DataFrame({
                 "PS": ["TOTAL"],
                 "Assigned": [total_assigned],
                 "Untouched": [total_untouched],
-                "Hot": [total_hot],
-                "Warm": [total_warm],
-                "Cold": [int(assigned_df["Cold"].sum()) if "Cold" in assigned_df.columns and not assigned_df.empty else 0],
                 "Open leads": [total_pending],
                 "Won": [total_won],
                 "Lost": [total_lost],
                 "Conversion(%)": [total_conv_pct],
             })
             assigned_df_display = pd.concat([assigned_df, total_row_ps], ignore_index=True)
+            
+            # Total row for Open leads table (with all columns)
+            total_row_open_leads = pd.DataFrame({
+                "PS": ["TOTAL"],
+                "Hot": [total_hot],
+                "Warm": [total_warm],
+                "Cold": [total_cold],
+                "Open leads": [total_pending],
+            })
+            assigned_df_full_display = pd.concat([assigned_df_full, total_row_open_leads], ignore_index=True)
 
             total_rows_ps = int(len(assigned_df_display)) + 1
             row_px_ps = 34
@@ -1957,14 +1971,14 @@ with tab2:
             height_ps = header_px_ps + row_px_ps * total_rows_ps + padding_px_ps
             with ps_left_col:
                 st.dataframe(assigned_df_display, use_container_width=True, height=height_ps, hide_index=True)
-                # Replicated table named Open Leads (uses same branch filter and data)
+                # Replicated table named Open Leads (uses full data with Hot, Warm, Cold columns)
                 with st.container():
                     st.subheader("Open Leads")
                     try:
-                        keep_cols = [c for c in ["PS", "Hot", "Warm", "Cold", "Open leads"] if c in assigned_df_display.columns]
-                        open_leads_display = assigned_df_display[keep_cols]
+                        keep_cols = [c for c in ["PS", "Hot", "Warm", "Cold", "Open leads"] if c in assigned_df_full_display.columns]
+                        open_leads_display = assigned_df_full_display[keep_cols]
                     except Exception:
-                        open_leads_display = assigned_df_display
+                        open_leads_display = assigned_df_full_display
                     st.dataframe(open_leads_display, use_container_width=True, height=height_ps, hide_index=True)
                 # Underlying PS Follow-ups (ps_followup_master) below PS Performance (Digital)
                 show_underlying_ps = st.toggle("view underlying data", value=False, key="toggle_ps_followup_branch")
